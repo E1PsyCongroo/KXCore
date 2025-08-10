@@ -8,7 +8,6 @@ import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core.frontend._
 import KXCore.superscalar.core.backend._
-import KXCore.superscalar.core.backend.CSRAddr.DMW0
 
 class DebugInfo(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, backendParams}
@@ -108,6 +107,7 @@ class Core(implicit params: CoreParameters) extends Module {
   io.debug0   := 0.U.asTypeOf(new DebugInfo)
 
   if (params.debug) {
+    import KXCore.common.Instruction._
     dontTouch(backend.io.debug)
     val difftestInstrCommit = Module(new DifftestInstrCommit)
     val difftestGRegState   = Module(new DifftestGRegState)
@@ -118,17 +118,22 @@ class Core(implicit params: CoreParameters) extends Module {
     val difftestLoadEvent   = Module(new DifftestLoadEvent)
 
     val commit_idx = OHToUInt(VecInit(backend.io.debug.commit_uops.map(_.valid)).asUInt)
-    difftestInstrCommit.io.clock          := clock.asBool
-    difftestInstrCommit.io.coreid         := 0.U
-    difftestInstrCommit.io.index          := 0.U
-    difftestInstrCommit.io.valid          := RegNext(backend.io.commit.valid && !backend.io.csr_access.excp_en, 0.U)
-    difftestInstrCommit.io.pc             := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.pc, 0.U)
-    difftestInstrCommit.io.instr          := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.inst, 0.U)
-    difftestInstrCommit.io.skip           := RegNext(false.B, false.B)
-    difftestInstrCommit.io.is_TLBFILL     := RegNext(false.B, false.B)
-    difftestInstrCommit.io.TLBFILL_index  := RegNext(false.B, false.B)
-    difftestInstrCommit.io.is_CNTinst     := RegNext(false.B, false.B)
-    difftestInstrCommit.io.timer_64_value := RegNext(csr.io.cntvh ## csr.io.cntvl, 0.U)
+    difftestInstrCommit.io.clock         := clock.asBool
+    difftestInstrCommit.io.coreid        := 0.U
+    difftestInstrCommit.io.index         := 0.U
+    difftestInstrCommit.io.valid         := RegNext(backend.io.commit.valid && !backend.io.csr_access.excp_en, 0.U)
+    difftestInstrCommit.io.pc            := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.pc, 0.U)
+    difftestInstrCommit.io.instr         := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.inst, 0.U)
+    difftestInstrCommit.io.skip          := RegNext(false.B, false.B)
+    difftestInstrCommit.io.is_TLBFILL    := RegNext(false.B, false.B)
+    difftestInstrCommit.io.TLBFILL_index := RegNext(false.B, false.B)
+    difftestInstrCommit.io.is_CNTinst := RegNext(
+      Seq(RDCNTID_W_0, RDCNTID_W_1, RDCNTID_W_2, RDCNTID_W_3, RDCNTID_W_4, RDCNTVL_W, RDCNTVH_W)
+        .map(_.inst === backend.io.debug.commit_uops(commit_idx).bits.inst)
+        .reduce(_ || _),
+      false.B,
+    )
+    difftestInstrCommit.io.timer_64_value := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.timer, 0.U)
     difftestInstrCommit.io.wen            := RegNext(backend.io.debug.commit_uops(commit_idx).bits.ldst =/= 0.U, 0.U)
     difftestInstrCommit.io.wdest          := RegNext(backend.io.debug.commit_uops(commit_idx).bits.ldst, 0.U)
     difftestInstrCommit.io.wdata          := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.wdata, 0.U)

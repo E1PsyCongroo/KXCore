@@ -426,18 +426,14 @@ class UniqueExeUnit(
 
   iss_uop_ext.ready(2) := true.B
 
+  stage1Regs.ready := false.B
+  stage1Uop.ready  := false.B
+
   val io_unq_resp = IO(Output(Valid(new ExeUnitResp)))
 
   io_unq_resp.valid             := false.B
   io_unq_resp.bits              := DontCare
   io_unq_resp.bits.brInfo.valid := false.B
-
-  stage1Uop.ready  := false.B
-  stage1Regs.ready := false.B
-
-  val doing     = RegInit(false.B)
-  val stage2Uop = RegEnable(stage1Uop.bits, stage1Uop.fire && !doing)
-  doing := Mux(io_kill, false.B, Mux(stage1Uop.fire, true.B, Mux(io_unq_resp.valid, false.B, doing)))
 
   if (hasMul) {
     val mulUnit = Module(new MultiplyUnit)
@@ -450,13 +446,10 @@ class UniqueExeUnit(
     mulUnit.io.req.valid         := false.B
     when(stage1Uop.valid && stage1Regs.valid && EXUType.isMul(stage1Uop.bits.exuCmd)) {
       mulUnit.io.req.valid := true.B
-      stage1Uop.ready      := mulUnit.io.req.fire
-      stage1Regs.ready     := mulUnit.io.req.fire
-    }
-
-    when(!EXUType.isDiv(stage2Uop.exuCmd)) {
-      io_unq_resp.valid := mulUnit.io.resp.valid
-      io_unq_resp.bits  := mulUnit.io.resp.bits
+      stage1Uop.ready      := mulUnit.io.resp.valid
+      stage1Regs.ready     := mulUnit.io.resp.valid
+      io_unq_resp.valid    := mulUnit.io.resp.valid
+      io_unq_resp.bits     := mulUnit.io.resp.bits
     }
     mulUnit.io.resp.ready := true.B
   }
@@ -469,17 +462,13 @@ class UniqueExeUnit(
     divUnit.io.req.bits.rs2_data := stage1Regs.bits(1)
     divUnit.io.req.bits.uop      := stage1Uop.bits
     divUnit.io.req.bits.ftq_info := DontCare
-
-    divUnit.io.req.valid := false.B
+    divUnit.io.req.valid         := false.B
     when(stage1Uop.valid && stage1Regs.valid && EXUType.isDiv(stage1Uop.bits.exuCmd)) {
       divUnit.io.req.valid := true.B
-      stage1Uop.ready      := divUnit.io.req.fire
-      stage1Regs.ready     := divUnit.io.req.fire
-    }
-
-    when(EXUType.isDiv(stage2Uop.exuCmd)) {
-      io_unq_resp.valid := divUnit.io.resp.valid
-      io_unq_resp.bits  := divUnit.io.resp.bits
+      stage1Uop.ready      := divUnit.io.resp.valid
+      stage1Regs.ready     := divUnit.io.resp.valid
+      io_unq_resp.valid    := divUnit.io.resp.valid
+      io_unq_resp.bits     := divUnit.io.resp.bits
     }
     divUnit.io.resp.ready := true.B
   }
@@ -513,12 +502,12 @@ class UniqueExeUnit(
     io_csr_access.get.we    := false.B
 
     when(stage1Uop.valid && stage1Regs.valid && isCSR(stage1Uop.bits.exuCmd)) {
-      io_csr_access.get.we := CSRType.isWrite(stage1Uop.bits.csrCmd)
-      stage1Uop.ready      := true.B
       stage1Regs.ready     := true.B
+      stage1Uop.ready      := true.B
+      io_csr_access.get.we := CSRType.isWrite(stage1Uop.bits.csrCmd)
       io_unq_resp.valid    := true.B
       io_unq_resp.bits.uop := stage1Uop.bits
-      io_unq_resp.bits.data := MuxLookup(stage1Uop.bits.exuCmd, io_csr_access.get.rdata)(
+      io_unq_resp.bits.data := MuxLookup(stage1Uop.bits.csrCmd, io_csr_access.get.rdata)(
         Seq(
           CSRType.RDCNTID.asUInt -> io_csr_access.get.counterID,
           CSRType.RDCNTVL.asUInt -> io_csr_access.get.cntvl,
@@ -530,7 +519,6 @@ class UniqueExeUnit(
 
   dontTouch(stage1Uop)
   dontTouch(stage1Regs)
-  dontTouch(stage2Uop)
 }
 
 class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {

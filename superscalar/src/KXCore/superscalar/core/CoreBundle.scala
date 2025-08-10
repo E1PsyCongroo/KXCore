@@ -52,6 +52,7 @@ class MicroOp(implicit params: CoreParameters) extends Bundle {
   val debug = new Bundle {
     val pc         = UInt(vaddrWidth.W)
     val inst       = UInt(instWidth.W)
+    val timer      = UInt(64.W)
     val store      = UInt(8.W)
     val storePaddr = UInt(paddrWidth.W)
     val storeVaddr = UInt(vaddrWidth.W)

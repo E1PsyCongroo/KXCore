@@ -273,9 +273,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   regFile.io.write_ports(0).bits.addr := memExeUnit.io_mem_resp.bits.uop.pdst
   regFile.io.write_ports(0).bits.data := memExeUnit.io_mem_resp.bits.data
 
-  rob.io.write(0).valid       := memExeUnit.io_mem_resp.valid
-  rob.io.write(0).bits.uop    := memExeUnit.io_mem_resp.bits.uop
-  rob.io.write(0).bits.brInfo := memExeUnit.io_mem_resp.bits.brInfo
+  rob.io.write(0).valid                := memExeUnit.io_mem_resp.valid
+  rob.io.write(0).bits.uop             := memExeUnit.io_mem_resp.bits.uop
+  rob.io.write(0).bits.uop.debug.timer := io.csr_access.cntvh ## io.csr_access.cntvl
+  rob.io.write(0).bits.brInfo          := memExeUnit.io_mem_resp.bits.brInfo
 
   renameBusyTable.io.wbValids(1) := unqExeUnit.io_unq_resp.valid
   renameBusyTable.io.wbPdsts(1)  := unqExeUnit.io_unq_resp.bits.uop.pdst
@@ -292,9 +293,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   regFile.io.write_ports(1).bits.addr := unqExeUnit.io_unq_resp.bits.uop.pdst
   regFile.io.write_ports(1).bits.data := unqExeUnit.io_unq_resp.bits.data
 
-  rob.io.write(1).valid       := unqExeUnit.io_unq_resp.valid
-  rob.io.write(1).bits.uop    := unqExeUnit.io_unq_resp.bits.uop
-  rob.io.write(1).bits.brInfo := unqExeUnit.io_unq_resp.bits.brInfo
+  rob.io.write(1).valid                := unqExeUnit.io_unq_resp.valid
+  rob.io.write(1).bits.uop             := unqExeUnit.io_unq_resp.bits.uop
+  rob.io.write(1).bits.uop.debug.timer := io.csr_access.cntvh ## io.csr_access.cntvl
+  rob.io.write(1).bits.brInfo          := unqExeUnit.io_unq_resp.bits.brInfo
 
   for (i <- 0 until aluExeUnits.length) {
     renameBusyTable.io.wbValids(i + 2) := aluExeUnits(i).io_alu_resp.valid
@@ -312,9 +314,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     regFile.io.write_ports(i + 2).bits.addr := aluExeUnits(i).io_alu_resp.bits.uop.pdst
     regFile.io.write_ports(i + 2).bits.data := aluExeUnits(i).io_alu_resp.bits.data
 
-    rob.io.write(i + 2).valid       := aluExeUnits(i).io_alu_resp.valid
-    rob.io.write(i + 2).bits.uop    := aluExeUnits(i).io_alu_resp.bits.uop
-    rob.io.write(i + 2).bits.brInfo := aluExeUnits(i).io_alu_resp.bits.brInfo
+    rob.io.write(i + 2).valid                := aluExeUnits(i).io_alu_resp.valid
+    rob.io.write(i + 2).bits.uop             := aluExeUnits(i).io_alu_resp.bits.uop
+    rob.io.write(i + 2).bits.uop.debug.timer := io.csr_access.cntvh ## io.csr_access.cntvl
+    rob.io.write(i + 2).bits.brInfo          := aluExeUnits(i).io_alu_resp.bits.brInfo
   }
 
   // commit
