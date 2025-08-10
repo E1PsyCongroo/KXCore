@@ -1,0 +1,146 @@
+package KXCore.superscalar.core
+
+import chisel3._
+import chisel3.util._
+
+class DifftestInstrCommit extends BlackBox {
+  val io = IO(new Bundle {
+    val clock          = Input(Bool())
+    val coreid         = Input(UInt(8.W))
+    val index          = Input(UInt(8.W))
+    val valid          = Input(Bool())
+    val pc             = Input(UInt(64.W))
+    val instr          = Input(UInt(32.W))
+    val skip           = Input(Bool())
+    val is_TLBFILL     = Input(Bool())
+    val TLBFILL_index  = Input(UInt(5.W))
+    val is_CNTinst     = Input(Bool())
+    val timer_64_value = Input(UInt(64.W))
+    val wen            = Input(Bool())
+    val wdest          = Input(UInt(8.W))
+    val wdata          = Input(UInt(64.W))
+    val csr_rstat      = Input(Bool())
+    val csr_data       = Input(UInt(32.W))
+  })
+}
+
+class DifftestExcpEvent extends BlackBox {
+  val io = IO(new Bundle {
+    val clock         = Input(Bool())
+    val coreid        = Input(UInt(8.W))
+    val excp_valid    = Input(Bool())
+    val eret          = Input(Bool())
+    val intrNo        = Input(UInt(32.W))
+    val cause         = Input(UInt(32.W))
+    val exceptionPC   = Input(UInt(64.W))
+    val exceptionInst = Input(UInt(32.W))
+  })
+}
+
+class DifftestTrapEvent extends BlackBox {
+  val io = IO(new Bundle {
+    val clock    = Input(Bool())
+    val coreid   = Input(UInt(8.W))
+    val valid    = Input(Bool())
+    val code     = Input(UInt(3.W))
+    val pc       = Input(UInt(64.W))
+    val cycleCnt = Input(UInt(64.W))
+    val instrCnt = Input(UInt(64.W))
+  })
+}
+
+class DifftestStoreEvent extends BlackBox {
+  val io = IO(new Bundle {
+    val clock      = Input(Bool())
+    val coreid     = Input(UInt(8.W))
+    val index      = Input(UInt(8.W))
+    val valid      = Input(UInt(8.W))
+    val storePAddr = Input(UInt(64.W))
+    val storeVAddr = Input(UInt(64.W))
+    val storeData  = Input(UInt(64.W))
+  })
+}
+
+class DifftestLoadEvent extends BlackBox {
+  val io = IO(new Bundle {
+    val clock  = Input(Bool())
+    val coreid = Input(UInt(8.W))
+    val index  = Input(UInt(8.W))
+    val valid  = Input(UInt(8.W))
+    val paddr  = Input(UInt(64.W))
+    val vaddr  = Input(UInt(64.W))
+  })
+}
+
+class DifftestCSRRegState extends BlackBox {
+  val io = IO(new Bundle {
+    val clock     = Input(Bool())
+    val coreid    = Input(UInt(8.W))
+    val crmd      = Input(UInt(64.W))
+    val prmd      = Input(UInt(64.W))
+    val euen      = Input(UInt(64.W))
+    val ecfg      = Input(UInt(64.W))
+    val estat     = Input(UInt(64.W))
+    val era       = Input(UInt(64.W))
+    val badv      = Input(UInt(64.W))
+    val eentry    = Input(UInt(64.W))
+    val tlbidx    = Input(UInt(64.W))
+    val tlbehi    = Input(UInt(64.W))
+    val tlbelo0   = Input(UInt(64.W))
+    val tlbelo1   = Input(UInt(64.W))
+    val asid      = Input(UInt(64.W))
+    val pgdl      = Input(UInt(64.W))
+    val pgdh      = Input(UInt(64.W))
+    val save0     = Input(UInt(64.W))
+    val save1     = Input(UInt(64.W))
+    val save2     = Input(UInt(64.W))
+    val save3     = Input(UInt(64.W))
+    val tid       = Input(UInt(64.W))
+    val tcfg      = Input(UInt(64.W))
+    val tval      = Input(UInt(64.W))
+    val ticlr     = Input(UInt(64.W))
+    val llbctl    = Input(UInt(64.W))
+    val tlbrentry = Input(UInt(64.W))
+    val dmw0      = Input(UInt(64.W))
+    val dmw1      = Input(UInt(64.W))
+  })
+}
+
+class DifftestGRegState extends BlackBox {
+  val io = IO(new Bundle {
+    val clock  = Input(Bool())
+    val coreid = Input(UInt(8.W))
+    val gpr_0  = Input(UInt(64.W))
+    val gpr_1  = Input(UInt(64.W))
+    val gpr_2  = Input(UInt(64.W))
+    val gpr_3  = Input(UInt(64.W))
+    val gpr_4  = Input(UInt(64.W))
+    val gpr_5  = Input(UInt(64.W))
+    val gpr_6  = Input(UInt(64.W))
+    val gpr_7  = Input(UInt(64.W))
+    val gpr_8  = Input(UInt(64.W))
+    val gpr_9  = Input(UInt(64.W))
+    val gpr_10 = Input(UInt(64.W))
+    val gpr_11 = Input(UInt(64.W))
+    val gpr_12 = Input(UInt(64.W))
+    val gpr_13 = Input(UInt(64.W))
+    val gpr_14 = Input(UInt(64.W))
+    val gpr_15 = Input(UInt(64.W))
+    val gpr_16 = Input(UInt(64.W))
+    val gpr_17 = Input(UInt(64.W))
+    val gpr_18 = Input(UInt(64.W))
+    val gpr_19 = Input(UInt(64.W))
+    val gpr_20 = Input(UInt(64.W))
+    val gpr_21 = Input(UInt(64.W))
+    val gpr_22 = Input(UInt(64.W))
+    val gpr_23 = Input(UInt(64.W))
+    val gpr_24 = Input(UInt(64.W))
+    val gpr_25 = Input(UInt(64.W))
+    val gpr_26 = Input(UInt(64.W))
+    val gpr_27 = Input(UInt(64.W))
+    val gpr_28 = Input(UInt(64.W))
+    val gpr_29 = Input(UInt(64.W))
+    val gpr_30 = Input(UInt(64.W))
+    val gpr_31 = Input(UInt(64.W))
+  })
+}

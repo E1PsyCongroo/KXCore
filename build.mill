@@ -1,0 +1,37 @@
+package build
+import mill._
+import scalalib._
+import $ivy.`com.goyeau::mill-scalafix::0.5.1`
+import com.goyeau.mill.scalafix.ScalafixModule
+
+trait LA32RCore extends ScalaModule with ScalafixModule { m =>
+  def scalaVersion = "2.13.16"
+  def scalacOptions = Seq(
+    "-language:reflectiveCalls",
+    "-deprecation",
+    "-feature",
+    "-Xcheckinit",
+    "-P:acyclic:force",
+  )
+  def ivyDeps = Agg(
+    ivy"org.chipsalliance::chisel:7.0.0-RC1",
+    ivy"com.lihaoyi:acyclic_2.13.16:0.3.18",
+  )
+  def compileIvyDeps = Agg(ivy"com.lihaoyi:::acyclic:0.3.18")
+  def scalacPluginIvyDeps = Agg(
+    ivy"org.chipsalliance:::chisel-plugin:7.0.0-RC1",
+    ivy"com.lihaoyi:::acyclic:0.3.18",
+  )
+  object test extends ScalaTests with TestModule.ScalaTest {
+    def ivyDeps = m.ivyDeps() ++ Agg(
+      ivy"org.scalatest::scalatest::3.2.19",
+    )
+  }
+}
+
+object common extends LA32RCore {}
+
+object superscalar extends LA32RCore {
+  override def moduleDeps = Seq(common)
+  override def mainClass  = Some("KXCore.superscalar.Elaborate")
+}

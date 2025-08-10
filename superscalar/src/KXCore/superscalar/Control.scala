@@ -1,0 +1,120 @@
+package KXCore.superscalar
+
+import chisel3._
+import chisel3.util._
+
+object EXUType extends ChiselEnum {
+  val EXU_SLL = Value("b0000".U)
+  val EXU_EQ  = Value("b0001".U)
+  val EXU_SRL = Value("b0010".U)
+  val EXU_SRA = Value("b0011".U)
+  val EXU_NEQ = Value("b0100".U)
+  val EXU_ADD = Value("b0101".U)
+  val EXU_XOR = Value("b0110".U)
+  val EXU_AND = Value("b0111".U)
+
+  val EXU_SUB  = Value("b1000".U)
+  val EXU_SLT  = Value("b1001".U)
+  val EXU_SLTU = Value("b1010".U)
+  val EXU_OR   = Value("b1011".U)
+  val EXU_NOR  = Value("b1100".U)
+  val EXU_SGE  = Value("b1101".U)
+  val EXU_SGEU = Value("b1110".U)
+
+  def EXU_MUL   = EXU_SLL
+  def EXU_MULH  = EXU_EQ
+  def EXU_MULHU = EXU_SRA
+  def EXU_DIV   = EXU_SUB
+  def EXU_MOD   = EXU_SLT
+  def EXU_DIVU  = EXU_SLTU
+  def EXU_MODU  = EXU_OR
+
+  val EXU_CSR = Value("b1111".U)
+
+  def isSub(cmd: UInt)           = cmd(3)
+  def isCmp(cmd: UInt)           = cmd(3) & (cmd(0) ^ cmd(1))
+  def cmpUnsigned(cmd: UInt)     = cmd(1)
+  def cmpInverted(cmd: UInt)     = cmd(2)
+  def cmpEq(cmd: UInt)           = !cmd(3)
+  def shiftReverse(cmd: UInt)    = !cmd(1)
+  def shiftArith(cmd: UInt)      = cmd(0)
+  def mul_divUnsigned(cmd: UInt) = cmd(1)
+  def ismulh_mod(cmd: UInt)      = cmd(0)
+  def isCSR(cmd: UInt)           = cmd.andR
+  def isMul(cmd: UInt)           = !cmd(3)
+  def isDiv(cmd: UInt)           = cmd(3) & !isCSR(cmd)
+
+}
+
+object LSUType extends ChiselEnum {
+  val LSU_STB  = Value("b000".U)
+  val LSU_STH  = Value("b001".U)
+  val LSU_STW  = Value("b010".U)
+  val LSU_LDW  = Value("b011".U)
+  val LSU_LDB  = Value("b100".U)
+  val LSU_LDH  = Value("b101".U)
+  val LSU_LDBU = Value("b110".U)
+  val LSU_LDHU = Value("b111".U)
+
+  def isUnsinged(cmd: UInt) = cmd(1)
+  def isStore(cmd: UInt)    = !cmd(2) && !(cmd(0) && cmd(1))
+}
+
+object CSRType extends ChiselEnum {
+  val XCHG               = Value("b000".U)
+  val RW                 = Value("b001".U)
+  val RDCNTID            = Value("b100".U)
+  val RDCNTVL            = Value("b101".U)
+  val RDCNTVH            = Value("b110".U)
+  val RD                 = Value("b111".U)
+  def isWrite(cmd: UInt) = !cmd(2)
+}
+
+// RS1 Operand Select Signal
+object OP1Type extends ChiselEnum {
+  val OP1_RS1  = Value // Register Source #1
+  val OP1_PC   = Value // Program Counter
+  val OP1_ZERO = Value
+}
+
+// RS2 Operand Select Signal
+object OP2Type extends ChiselEnum {
+  val OP2_RS2  = Value // Register Source #2
+  val OP2_IMM  = Value // immediate
+  val OP2_NEXT = Value // constant 4 (for PC+4)
+}
+
+object IMMType extends ChiselEnum {
+  val LONGEST_IMM_WIDTH = 26
+  val IMM_5U            = Value
+  val IMM_12            = Value
+  val IMM_12U           = Value
+  val IMM_14U           = Value
+  val IMM_15U           = Value
+  val IMM_16            = Value
+  val IMM_20            = Value
+  val IMM_26            = Value
+}
+
+object IQType extends ChiselEnum {
+  val IQT_INT = Value(0.U)
+  val IQT_UNQ = Value(1.U)
+  val IQT_MEM = Value(2.U)
+}
+
+object FUType extends ChiselEnum {
+  // bit mask, since a given execution pipeline may support multiple functional units
+  val FUT_ALU = Value(1.U)
+  val FUT_CFI = Value(2.U)
+  val FUT_MEM = Value(4.U)
+  val FUT_MUL = Value(8.U)
+  val FUT_DIV = Value(16.U)
+  val FUT_CSR = Value(32.U)
+}
+
+object CFIType extends ChiselEnum {
+  val CFI_NONE = Value(0.U)
+  val CFI_BR   = Value(1.U)
+  val CFI_B    = Value(2.U)
+  val CFI_JIRL = Value(3.U)
+}
