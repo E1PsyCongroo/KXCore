@@ -28,11 +28,10 @@ class BIM(implicit params: CoreParameters) extends Module {
 
   class BIMStage0to1 extends Module {
     val io = IO(new Bundle {
-      val flush    = Input(Bool())
-      val req      = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val resp     = Decoupled(new BIMMeta)
-      val keepRead = Input(UInt(vaddrWidth.W))
-      val update   = Flipped(Valid(new BranchPredictionUpdate))
+      val flush  = Input(Bool())
+      val req    = Flipped(Decoupled(UInt(vaddrWidth.W)))
+      val resp   = Decoupled(new BIMMeta)
+      val update = Flipped(Valid(new BranchPredictionUpdate))
     })
 
     val doingReset = RegInit(true.B)
@@ -46,10 +45,11 @@ class BIM(implicit params: CoreParameters) extends Module {
     io.req.ready  := ((nextEn === 0.U) || io.flush) && !doingReset
     io.resp.valid := en && !io.flush
 
-    val metas   = SyncReadMem(nSets, Vec(fetchWidth, UInt(2.W)))
-    val readEn  = io.req.fire || nextEn
-    val readSet = getSet(Mux(io.req.fire, io.req.bits, io.keepRead))
-    val bims    = metas.read(readSet, readEn)
+    val holdReqReg = RegEnable(io.req.bits, io.req.ready)
+    val readSet    = getSet(Mux(io.req.ready, io.req.bits, holdReqReg))
+
+    val metas = SyncReadMem(nSets, Vec(fetchWidth, UInt(2.W)))
+    val bims  = metas.read(readSet)
 
     val updateWdata = Wire(Vec(fetchWidth, UInt(2.W)))
     val updateWmask = Wire(Vec(fetchWidth, Bool()))
@@ -100,10 +100,7 @@ class BIM(implicit params: CoreParameters) extends Module {
 
   val io = IO(new Bundle {
     val flush = Input(Bool())
-    val req = new Bundle {
-      val stage0 = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val stage1 = Flipped(Valid(UInt(vaddrWidth.W)))
-    }
+    val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
     val resp = Decoupled(new Bundle {
       val pred = Vec(fetchWidth, new BranchPrediction)
       val meta = Vec(fetchWidth, UInt(2.W))
@@ -114,12 +111,10 @@ class BIM(implicit params: CoreParameters) extends Module {
   val stage0to1 = Module(new BIMStage0to1)
   val stage1    = Module(new BIMStage1)
 
-  stage0to1.io.flush := io.flush
+  stage0to1.io.flush  := io.flush
+  stage0to1.io.update := io.update
 
-  io.req.stage0         <> stage0to1.io.req
-  stage0to1.io.update   := io.update
-  stage0to1.io.keepRead := io.req.stage1.bits
-
+  io.req         <> stage0to1.io.req
   stage1.io.req  <> stage0to1.io.resp
   stage1.io.resp <> io.resp
 }

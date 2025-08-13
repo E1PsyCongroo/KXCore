@@ -3,33 +3,6 @@ package KXCore.common
 import chisel3._
 import chisel3.util._
 
-class StageBundle[In <: Bundle, Out <: Bundle](inNum: Int, outNum: Int, genIn: => In, genOut: => Out)(implicit params: CommonParameters) extends Bundle {
-  val in  = Vec(inNum, Flipped(Decoupled(genIn)))
-  val out = Vec(outNum, Decoupled(genOut))
-}
-
-object PipeConnect {
-  def apply[T <: Data](
-      flush: Option[Bool],
-      fanIn: DecoupledIO[T],
-      fanOut: DecoupledIO[T]*,
-  ): (T, UInt) = {
-    require(!fanOut.isEmpty)
-    val write  = fanIn.valid
-    val finish = Cat(fanOut.map(_.ready).reverse)
-    val bits   = RegEnable(fanIn.bits, fanIn.fire)
-    val en     = RegInit(Fill(fanOut.length, false.B))
-    val nextEn = WireDefault(en & ~finish)
-    en          := Mux(fanIn.ready, Fill(fanOut.length, write), nextEn)
-    fanIn.ready := (nextEn === 0.U) || flush.getOrElse(false.B)
-    for ((right, idx) <- fanOut.zipWithIndex) {
-      right.bits  := bits
-      right.valid := !flush.getOrElse(false.B) && en(idx)
-    }
-    (bits, en)
-  }
-}
-
 object ReadyValidIOExpand {
   def apply[T <: Data](io: ReadyValidIO[T], num: Int) = {
     val ioExt = Wire(new Bundle {
@@ -46,5 +19,37 @@ object ReadyValidIOExpand {
       ioExt.valid(i) := io.valid && en(i)
     }
     ioExt
+  }
+}
+
+class PipeStageReg[T <: Data](gen: T, hasFlush: Boolean) extends Module {
+  val io = IO(new Bundle {
+    val flush = if (hasFlush) Some(Input(Bool())) else None
+    val in    = Flipped(Decoupled(gen))
+    val out   = Decoupled(gen)
+  })
+  val write  = io.in.valid
+  val finish = io.out.ready
+  val bits   = RegEnable(io.in.bits, io.in.ready)
+  val en     = RegInit(false.B)
+  val nextEn = WireDefault(en & ~finish)
+  en           := Mux(io.in.ready, write, nextEn)
+  io.in.ready  := (nextEn === 0.U) || io.flush.getOrElse(false.B)
+  io.out.bits  := bits
+  io.out.valid := !io.flush.getOrElse(false.B) && en
+}
+
+object PipeConnect {
+  def apply[T <: Data](
+      flush: Option[Bool],
+      fanIn: DecoupledIO[T],
+      fanOut: DecoupledIO[T],
+  ) = {
+    val pipeReg = Module(new PipeStageReg(fanIn.bits.cloneType, flush.isDefined))
+    if (flush.isDefined) pipeReg.io.flush.get := flush.get
+
+    fanIn          <> pipeReg.io.in
+    pipeReg.io.out <> fanOut
+    pipeReg
   }
 }

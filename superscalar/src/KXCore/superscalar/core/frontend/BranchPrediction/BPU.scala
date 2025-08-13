@@ -71,7 +71,6 @@ class SimpleBranchPredictor(implicit params: CoreParameters) extends Module {
     })
     val req = new Bundle {
       val stage0 = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val stage1 = Flipped(Decoupled(UInt(vaddrWidth.W)))
     }
     val resp = new Bundle {
       val stage1 = Decoupled(Vec(fetchWidth, new BranchPrediction))
@@ -95,20 +94,14 @@ class SimpleBranchPredictor(implicit params: CoreParameters) extends Module {
   btb.io.update := io.update
   bim.io.update := io.update
 
-  val stage0ReqExt = ReadyValidIOExpand(io.req.stage0, 2)
-  btb.io.req.stage0.valid := stage0ReqExt.valid(0)
-  stage0ReqExt.ready(0)   := btb.io.req.stage0.ready
-  btb.io.req.stage0.bits  := stage0ReqExt.bits
+  val stage0Ready = btb.io.req.ready && bim.io.req.ready
+  io.req.stage0.ready := stage0Ready
 
-  bim.io.req.stage0.valid := stage0ReqExt.valid(1)
-  stage0ReqExt.ready(1)   := bim.io.req.stage0.ready
-  bim.io.req.stage0.bits  := stage0ReqExt.bits
+  btb.io.req.valid := io.req.stage0.valid && stage0Ready
+  btb.io.req.bits  := io.req.stage0.bits
 
-  btb.io.req.stage1.valid := io.req.stage1.valid
-  btb.io.req.stage1.bits  := io.req.stage1.bits
-
-  bim.io.req.stage1.valid := io.req.stage1.valid
-  bim.io.req.stage1.bits  := io.req.stage1.bits
+  bim.io.req.valid := io.req.stage0.valid && stage0Ready
+  bim.io.req.bits  := io.req.stage0.bits
 
   val stage1Resp = Wire(Decoupled(io.resp.stage1.bits.cloneType))
   stage1Resp.valid  := btb.io.resp.valid && bim.io.resp.valid
@@ -118,7 +111,6 @@ class SimpleBranchPredictor(implicit params: CoreParameters) extends Module {
     stage1Resp.bits(i)       := btb.io.resp.bits.pred(i)
     stage1Resp.bits(i).taken := bim.io.resp.bits.pred(i).taken
   }
-  io.req.stage1.ready := stage1Resp.ready
 
   val stage1RespExt = ReadyValidIOExpand(stage1Resp, 2)
   io.resp.stage1.valid   := stage1RespExt.valid(0)

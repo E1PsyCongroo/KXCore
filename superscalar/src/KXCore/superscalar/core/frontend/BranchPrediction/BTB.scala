@@ -41,12 +41,12 @@ class BTB(implicit params: CoreParameters) extends Module {
       val flush = Input(Bool())
       val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
       val resp = Decoupled(new Bundle {
-        val meta = Vec(nWays, Vec(fetchWidth, new BTBMeta))
-        val btb  = Vec(nWays, Vec(fetchWidth, new BTBEntry))
-        val ebtb = UInt(vaddrWidth.W)
+        val fetchPC = UInt(vaddrWidth.W)
+        val meta    = Vec(nWays, Vec(fetchWidth, new BTBMeta))
+        val btb     = Vec(nWays, Vec(fetchWidth, new BTBEntry))
+        val ebtb    = UInt(vaddrWidth.W)
       })
-      val keepRead = Input(UInt(vaddrWidth.W))
-      val update   = Flipped(Valid(new BranchPredictionUpdate))
+      val update = Flipped(Valid(new BranchPredictionUpdate))
     })
 
     val doingReset = RegInit(true.B)
@@ -60,16 +60,16 @@ class BTB(implicit params: CoreParameters) extends Module {
     io.req.ready  := ((nextEn === 0.U) || io.flush) && !doingReset
     io.resp.valid := en && !io.flush
 
+    val holdReqReg = RegEnable(io.req.bits, io.req.ready)
+    val readSet    = getSet(Mux(io.req.ready, io.req.bits, holdReqReg))
+
     val meta = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, new BTBMeta)) }
     val btb  = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, new BTBEntry)) }
     val ebtb = SyncReadMem(extendedNSets, UInt(vaddrWidth.W))
 
-    val readEn  = io.req.fire || nextEn
-    val readSet = getSet(Mux(io.req.fire, io.req.bits, io.keepRead))
-
-    val rmeta = VecInit(meta.map(m => m.read(readSet, readEn)))
-    val rbtb  = VecInit(btb.map(m => m.read(readSet, readEn)))
-    val rebtb = ebtb.read(readSet, readEn)
+    val rmeta = VecInit(meta.map(m => m.read(readSet)))
+    val rbtb  = VecInit(btb.map(m => m.read(readSet)))
+    val rebtb = ebtb.read(readSet)
 
     val updateBits       = io.update.bits
     val updateSet        = getSet(updateBits.fetchPC)
@@ -114,18 +114,19 @@ class BTB(implicit params: CoreParameters) extends Module {
       ebtb.write(updateSet, updateBits.target)
     }
 
-    io.resp.bits.meta := rmeta
-    io.resp.bits.btb  := rbtb
-    io.resp.bits.ebtb := rebtb
+    io.resp.bits.fetchPC := holdReqReg
+    io.resp.bits.meta    := rmeta
+    io.resp.bits.btb     := rbtb
+    io.resp.bits.ebtb    := rebtb
   }
 
   class BTBStage1 extends Module {
     val io = IO(new Bundle {
       val req = Flipped(Decoupled(new Bundle {
-        val vaddr = UInt(vaddrWidth.W)
-        val meta  = Vec(nWays, Vec(fetchWidth, new BTBMeta))
-        val btb   = Vec(nWays, Vec(fetchWidth, new BTBEntry))
-        val ebtb  = UInt(vaddrWidth.W)
+        val fetchPC = UInt(vaddrWidth.W)
+        val meta    = Vec(nWays, Vec(fetchWidth, new BTBMeta))
+        val btb     = Vec(nWays, Vec(fetchWidth, new BTBEntry))
+        val ebtb    = UInt(vaddrWidth.W)
       }))
       val resp = Decoupled(new Bundle {
         val pred = Vec(fetchWidth, new BranchPrediction)
@@ -136,7 +137,7 @@ class BTB(implicit params: CoreParameters) extends Module {
     io.req.ready  := io.resp.ready
     io.resp.valid := io.req.valid
 
-    val tag = getTag(io.req.bits.vaddr)
+    val tag = getTag(io.req.bits.fetchPC)
 
     val hitOHs = VecInit((0 until fetchWidth).map { i =>
       VecInit((0 until nWays).map { w =>
@@ -151,10 +152,14 @@ class BTB(implicit params: CoreParameters) extends Module {
       val meta   = io.req.bits.meta(hitWay)(i)
       val btb    = io.req.bits.btb(hitWay)(i)
       io.resp.bits.pred(i).target.valid := hits(i)
-      io.resp.bits.pred(i).target.bits  := Mux(btb.extended, io.req.bits.ebtb, (io.req.bits.vaddr.asSInt + (i << log2Ceil(instBytes)).S + btb.offset).asUInt)
-      io.resp.bits.pred(i).isBr         := hits(i) && meta.isBr
-      io.resp.bits.pred(i).isJmp        := hits(i) && !meta.isBr
-      io.resp.bits.pred(i).taken        := DontCare
+      io.resp.bits.pred(i).target.bits := Mux(
+        btb.extended,
+        io.req.bits.ebtb,
+        (fetchAlign(io.req.bits.fetchPC).asSInt + (i << log2Ceil(instBytes)).S + btb.offset).asUInt,
+      )
+      io.resp.bits.pred(i).isBr  := hits(i) && meta.isBr
+      io.resp.bits.pred(i).isJmp := hits(i) && !meta.isBr
+      io.resp.bits.pred(i).taken := DontCare
     }
 
     val allocWay = if (nWays > 1) {
@@ -175,10 +180,7 @@ class BTB(implicit params: CoreParameters) extends Module {
 
   val io = IO(new Bundle {
     val flush = Input(Bool())
-    val req = new Bundle {
-      val stage0 = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val stage1 = Flipped(Valid(UInt(vaddrWidth.W)))
-    }
+    val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
     val resp = Decoupled(new Bundle {
       val pred = Vec(fetchWidth, new BranchPrediction)
       val meta = new BTBPredictMeta
@@ -189,18 +191,10 @@ class BTB(implicit params: CoreParameters) extends Module {
   val stage0to1 = Module(new BTBStage0to1)
   val stage1    = Module(new BTBStage1)
 
-  stage0to1.io.flush := io.flush
+  stage0to1.io.flush  := io.flush
+  stage0to1.io.update := io.update
 
-  io.req.stage0         <> stage0to1.io.req
-  stage0to1.io.update   := io.update
-  stage0to1.io.keepRead := io.req.stage1.bits
-
-  stage1.io.req.valid      := stage0to1.io.resp.valid && io.req.stage1.valid
-  stage0to1.io.resp.ready  := stage1.io.req.ready
-  stage1.io.req.bits.vaddr := io.req.stage1.bits
-  stage1.io.req.bits.meta  := stage0to1.io.resp.bits.meta
-  stage1.io.req.bits.btb   := stage0to1.io.resp.bits.btb
-  stage1.io.req.bits.ebtb  := stage0to1.io.resp.bits.ebtb
-
-  stage1.io.resp <> io.resp
+  io.req            <> stage0to1.io.req
+  stage0to1.io.resp <> stage1.io.req
+  stage1.io.resp    <> io.resp
 }

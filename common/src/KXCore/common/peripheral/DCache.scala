@@ -245,7 +245,7 @@ class DCacheStage1(implicit commonParams: CommonParameters, cacheParams: CachePa
   val wayDirty  = bits.cacheDirty(set)
   val wayTag    = bits.wayTag
   val isRead    = cacop === CACOP_HIT_READ.asUInt
-  val isFlush   = cacop === CACOP_FLUSH.asUInt
+  val isIdxInit = cacop === CACOP_IDX_INIT.asUInt
   val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
   val isHitInv  = cacop === CACOP_HIT_INV.asUInt
 
@@ -327,7 +327,7 @@ class DCacheStage1(implicit commonParams: CommonParameters, cacheParams: CachePa
 
   io.req.ready := MuxLookup(state, false.B)(
     Seq(
-      sHandleReq    -> (((isRead || isWrite) && hit && cached && io.resp.ready) || isFlush || isIdxInv || isHitInv),
+      sHandleReq    -> (((isRead || isWrite) && hit && cached && io.resp.ready) || isIdxInit || isIdxInv || isHitInv),
       sSendReadResp -> io.resp.ready,
     ),
   )
@@ -347,11 +347,11 @@ class DCacheStage1(implicit commonParams: CommonParameters, cacheParams: CachePa
 
   io.validWrite.valid := MuxLookup(state, false.B)(
     Seq(
-      sHandleReq -> (io.req.valid && ((isHitInv && hit) || isFlush || isIdxInv)),
+      sHandleReq -> (io.req.valid && ((isHitInv && hit) || isIdxInit || isIdxInv)),
       sWriteBack -> (io.req.valid),
     ),
   )
-  io.validWrite.bits.all  := isFlush
+  io.validWrite.bits.all  := isIdxInit
   io.validWrite.bits.set  := Mux(isIdxInv, idxSet, set)
   io.validWrite.bits.way  := Mux(isIdxInv, idxWay, Mux(isHitInv, matched, replacedSel))
   io.validWrite.bits.data := (isRead || isWrite)
