@@ -101,8 +101,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   val decUopFireReg = RegInit(0.U(coreWidth.W))
   decData.valid        := io.fetchPacket.valid
   io.fetchPacket.ready := decData.ready
-  decUopFire           := VecInit(io.fetchPacket.bits.uops.map(_.valid)).asUInt
-  decUopFireReg        := Mux(flush, 0.U, Mux(decData.fire, Mux(decUopFire.andR, 0.U, decUopFire), decUopFireReg))
+
+  decUopFire    := VecInit(io.fetchPacket.bits.uops.map(_.valid)).asUInt
+  decUopFireReg := Mux(flush, 0.U, Mux(decData.fire, Mux(decUopFire.andR, 0.U, decUopFire), decUopFireReg))
+
   for (i <- 0 until coreWidth) {
     decoder.io.req(i)     := io.fetchPacket.bits.uops(i).bits
     decData.bits(i).valid := io.fetchPacket.bits.uops(i).valid && !decUopFireReg(i)
@@ -125,28 +127,30 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   val disUopFireReg = RegInit(0.U(coreWidth.W))
   disData.valid  := decToRen.valid
   decToRen.ready := disData.ready
-  disUopFireReg  := Mux(decToRen.ready || flush, 0.U, disUopFireReg | disUopFire)
-  disData.ready  := VecInit(decToRen.bits.map(_.valid)).asUInt === disUopFire
+
+  disUopFire    := VecInit(disData.bits.map(_.valid)).asUInt | disUopFireReg
+  disUopFireReg := Mux(decToRen.ready || flush, 0.U, disUopFire)
+  disData.ready := VecInit(decToRen.bits.map(_.valid)).asUInt === disUopFire
 
   var dis_not_fire    = false.B
   var dis_first_valid = true.B
   val dis_alloc_regs  = Reg(Vec(coreWidth, UInt(backendParams.pregWidth.W)))
   for (i <- 0 until coreWidth) {
-    renameFreeList.io.allocPregs(i).ready := disUopFire(i) && disData.bits(i).bits.ldst =/= 0.U
+    renameFreeList.io.allocPregs(i).ready := disData.bits(i).valid && disData.bits(i).bits.ldst =/= 0.U
     dis_alloc_regs(i) := Mux(
       renameFreeList.io.allocPregs(i).ready,
       renameFreeList.io.allocPregs(i).bits,
       dis_alloc_regs(i),
     )
 
-    renameMapTable.io.renRemapReqs(i).valid := disUopFire(i) && disData.bits(i).bits.ldst =/= 0.U
+    renameMapTable.io.renRemapReqs(i).valid := disData.bits(i).valid && disData.bits(i).bits.ldst =/= 0.U
     renameMapTable.io.renRemapReqs(i).ldst  := disData.bits(i).bits.ldst
     renameMapTable.io.renRemapReqs(i).pdst  := disData.bits(i).bits.pdst
 
     renameBusyTable.io.uopReqs(i)    := disData.bits(i).bits
     renameBusyTable.io.rebusyReqs(i) := disData.bits(i).valid
 
-    rob.io.alloc(i).valid := disUopFire(i)
+    rob.io.alloc(i).valid := disData.bits(i).valid
     rob.io.alloc(i).uop   := disData.bits(i).bits
 
     val dis_first_valid_yet = WireInit(dis_first_valid)
@@ -154,9 +158,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
 
     disData.bits(i).valid := decToRen.valid && decToRen.bits(i).valid && !disUopFireReg(i) &&
       (renameFreeList.io.allocPregs(i).valid || disData.bits(i).bits.ldst === 0.U) &&
-      (!disData.bits(i).bits.isUnique || (dis_first_valid_yet && rob.io.empty)) && !dis_not_fire_yet
+      (!disData.bits(i).bits.isUnique || (dis_first_valid_yet && rob.io.empty)) &&
+      rob.io.alloc(i).ready && dispatcher.io.ren_uops(i).ready && !dis_not_fire_yet
     disData.bits(i).bits        := decToRen.bits(i).bits
-    disData.bits(i).bits.pdst   := Mux(disData.bits(i).bits.ldst =/= 0.U, renameFreeList.io.allocPregs(i).bits, 0.U)
+    disData.bits(i).bits.pdst   := renameFreeList.io.allocPregs(i).bits
     disData.bits(i).bits.robIdx := rob.io.alloc(i).idx
     for (j <- 0 until i) {
       when(decToRen.bits(j).valid) {
@@ -175,12 +180,10 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     disData.bits(i).bits.prs2Busy := renameBusyTable.io.busyResps(i).prs2Busy
 
     dis_first_valid = dis_first_valid && !disData.bits(i).valid
-    dis_not_fire = dis_not_fire || (decToRen.bits(i).valid && !disUopFireReg(i) &&
-      (!disData.bits(i).valid || !dispatcher.io.ren_uops(i).ready || !rob.io.alloc(i).ready))
+    dis_not_fire = dis_not_fire || (decToRen.bits(i).valid && !disUopFireReg(i) && !disData.bits(i).valid)
     dispatcher.io.ren_uops(i).valid := disData.bits(i).valid
     dispatcher.io.ren_uops(i).bits  := disData.bits(i).bits
   }
-  disUopFire := VecInit(disData.bits.map(_.valid)).asUInt & VecInit(dispatcher.io.ren_uops.map(_.ready)).asUInt & VecInit(rob.io.alloc.map(_.ready)).asUInt
 
   // issue
   dispatcher.io.dis_uops(0) <> memIssUnit.io.dis_uops
@@ -256,14 +259,14 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   // write back
   val mem_csr_wb = Seq(memExeUnit.io_mem_resp, unqExeUnit.io_csr_resp.get, unqExeUnit.io_mul_div_resp.get)
   mem_csr_wb.zipWithIndex.foreach { case (resp, i) =>
-    renameBusyTable.io.wbValids(i) := resp.valid
+    renameBusyTable.io.wbValids(i) := resp.valid && resp.bits.uop.ldst =/= 0.U
     renameBusyTable.io.wbPdsts(i)  := resp.bits.uop.pdst
 
-    memIssUnit.io.wakeup_ports(i).valid := resp.valid
+    memIssUnit.io.wakeup_ports(i).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
     memIssUnit.io.wakeup_ports(i).bits  := resp.bits.uop.pdst
-    unqIssUnit.io.wakeup_ports(i).valid := resp.valid
+    unqIssUnit.io.wakeup_ports(i).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
     unqIssUnit.io.wakeup_ports(i).bits  := resp.bits.uop.pdst
-    intIssUnit.io.wakeup_ports(i).valid := resp.valid
+    intIssUnit.io.wakeup_ports(i).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
     intIssUnit.io.wakeup_ports(i).bits  := resp.bits.uop.pdst
 
     regFile.io.write_ports(i).valid     := resp.valid && resp.bits.uop.ldst =/= 0.U
@@ -278,25 +281,25 @@ class BackEnd(implicit params: CoreParameters) extends Module {
 
   val aluStart = mem_csr_wb.length
   for (i <- 0 until aluExeUnits.length) {
-    renameBusyTable.io.wbValids(i + aluStart) := aluExeUnits(i).io_alu_resp.valid
-    renameBusyTable.io.wbPdsts(i + aluStart)  := aluExeUnits(i).io_alu_resp.bits.uop.pdst
+    val resp = aluExeUnits(i).io_alu_resp
+    renameBusyTable.io.wbValids(i + aluStart) := resp.valid && resp.bits.uop.ldst =/= 0.U
+    renameBusyTable.io.wbPdsts(i + aluStart)  := resp.bits.uop.pdst
 
-    memIssUnit.io.wakeup_ports(i + aluStart).valid := aluExeUnits(i).io_alu_resp.valid
-    memIssUnit.io.wakeup_ports(i + aluStart).bits  := aluExeUnits(i).io_alu_resp.bits.uop.pdst
-    unqIssUnit.io.wakeup_ports(i + aluStart).valid := aluExeUnits(i).io_alu_resp.valid
-    unqIssUnit.io.wakeup_ports(i + aluStart).bits  := aluExeUnits(i).io_alu_resp.bits.uop.pdst
-    intIssUnit.io.wakeup_ports(i + aluStart).valid := aluExeUnits(i).io_alu_resp.valid
-    intIssUnit.io.wakeup_ports(i + aluStart).bits  := aluExeUnits(i).io_alu_resp.bits.uop.pdst
+    memIssUnit.io.wakeup_ports(i + aluStart).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
+    memIssUnit.io.wakeup_ports(i + aluStart).bits  := resp.bits.uop.pdst
+    unqIssUnit.io.wakeup_ports(i + aluStart).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
+    unqIssUnit.io.wakeup_ports(i + aluStart).bits  := resp.bits.uop.pdst
+    intIssUnit.io.wakeup_ports(i + aluStart).valid := resp.valid && resp.bits.uop.ldst =/= 0.U
+    intIssUnit.io.wakeup_ports(i + aluStart).bits  := resp.bits.uop.pdst
 
-    regFile.io.write_ports(i + aluStart).valid := aluExeUnits(i).io_alu_resp.valid &&
-      aluExeUnits(i).io_alu_resp.bits.uop.ldst =/= 0.U
-    regFile.io.write_ports(i + aluStart).bits.addr := aluExeUnits(i).io_alu_resp.bits.uop.pdst
-    regFile.io.write_ports(i + aluStart).bits.data := aluExeUnits(i).io_alu_resp.bits.data
+    regFile.io.write_ports(i + aluStart).valid     := resp.valid && resp.bits.uop.ldst =/= 0.U
+    regFile.io.write_ports(i + aluStart).bits.addr := resp.bits.uop.pdst
+    regFile.io.write_ports(i + aluStart).bits.data := resp.bits.data
 
-    rob.io.write(i + aluStart)                               := aluExeUnits(i).io_alu_resp
+    rob.io.write(i + aluStart)                               := resp
     rob.io.write(i + aluStart).bits.uop.debug.timer_64_value := io.csr_access.cntvh ## io.csr_access.cntvl
 
-    rob.io.brInfo(i).uop            := aluExeUnits(i).io_alu_resp.bits.uop
+    rob.io.brInfo(i).uop            := resp.bits.uop
     rob.io.brInfo(i).brRecoveryInfo := aluExeUnits(i).io_alu_brInfo
   }
 

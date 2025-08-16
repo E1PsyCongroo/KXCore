@@ -73,7 +73,7 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     maybe_full := false.B
   }
 
-  val redirect_entry     = ram(io.redirect.idx)
+  val redirect_entry     = WireInit(ram(io.redirect.idx))
   val redirect_new_entry = WireInit(redirect_entry)
   when(io.redirect.valid) {
     enq_ptr    := WrapInc(io.redirect.idx, ftqNum)
@@ -123,5 +123,10 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     when(idx === enq_ptr) {
       io.resps(i).entry.fetchPC := io.enq.bits.pc
     }
+  }
+
+  if (params.debug) {
+    dontTouch(redirect_entry)
+    dontTouch(redirect_new_entry)
   }
 }

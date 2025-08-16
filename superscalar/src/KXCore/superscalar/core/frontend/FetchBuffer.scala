@@ -10,7 +10,7 @@ import KXCore.superscalar.core._
 /** Buffer to hold fetched packets and convert them into a vector of MicroOps to give the Decode stage
   */
 class FetchBuffer(implicit params: CoreParameters) extends Module {
-  import params.{commonParams, frontendParams, backendParams}
+  import params.{fetchBytes, commonParams, frontendParams, backendParams}
   import frontendParams.{fetchWidth, fbNum}
   import backendParams.{coreWidth}
 
@@ -67,7 +67,7 @@ class FetchBuffer(implicit params: CoreParameters) extends Module {
     val pc = io.enq.bits.pcs(i)
     in_uops(i)       := DontCare
     in_mask(i)       := io.enq.valid && io.enq.bits.mask(i)
-    in_uops(i).pcLow := pc(log2Ceil(fetchWidth) - 1, 0)
+    in_uops(i).pcLow := pc(log2Ceil(fetchBytes) - 1, 0)
     in_uops(i).inst  := io.enq.bits.insts(i)
 
     in_uops(i).ftqIdx := io.enq.bits.ftqIdx
@@ -125,7 +125,7 @@ class FetchBuffer(implicit params: CoreParameters) extends Module {
 
   io.deq.bits.uops zip deq_valids map { case (d, v) => d.valid := v }
   io.deq.bits.uops zip Mux1H(head, deq_vec) map { case (d, q) => d.bits := q }
-  io.deq.valid := deq_valids.reduce(_ || _)
+  io.deq.valid := deq_valids.reduce(_ || _) && !io.flush
 
   // -------------------------------------------------------------
   // **** Update State ****

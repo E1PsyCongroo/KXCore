@@ -34,9 +34,9 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   s0_regs.valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy &&
     io_read_reqs.map(req => (!req.valid || req.ready)).reduce(_ && _)
   iss_uop_ext.ready(0) := s0_regs.fire
-  s0_regs.bits(0)      := io_read_resps(0)
+  s0_regs.bits(0)      := Mux(iss_uop_ext.bits.lrs1 =/= 0.U, io_read_resps(0), 0.U)
   if (nReaders == 2) {
-    s0_regs.bits(1) := io_read_resps(1)
+    s0_regs.bits(1) := Mux(iss_uop_ext.bits.lrs2 =/= 0.U, io_read_resps(1), 0.U)
   }
 
   val s0_uop = Wire(Decoupled(new MicroOp))
@@ -182,8 +182,6 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   )
   state := nextState
 
-  s2_data.ready := (nextState === sWaitResp) || (nextState === sSendXcep)
-
   io_axi.ar.valid     := state === sSendReq && s2_data.valid && !s2_data.bits.isWrite && !s2_data.bits.uop.exception
   io_axi.ar.bits.addr := s2_data.bits.paddr
   io_axi.ar.bits.id   := 1.U
@@ -272,6 +270,8 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_mem_xcep.valid     := !io_kill && (state === sSendXcep)
   io_mem_xcep.bits      := s2_data.bits.uop
   io_mem_xcep.bits.badv := s2_data.bits.vaddr
+
+  s2_data.ready := io_mem_resp.valid || io_mem_xcep.valid
 
   if (params.debug) {
     dontTouch(state)

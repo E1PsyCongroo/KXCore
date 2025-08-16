@@ -163,7 +163,8 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
             val btb = UInt(log2Ceil(btbParams.nWays).W)
           }
         }
-        val stage1Redirect = UInt(vaddrWidth.W)
+        val redirect = Bool()
+        val npc      = UInt(vaddrWidth.W)
       },
       true,
     ),
@@ -229,12 +230,13 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheStage1.io.resp.ready := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
   bpuStage1.io.resp.ready    := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
 
-  pipeStage1to2.io.in.valid               := s1_fire
-  pipeStage1to2.io.in.bits.fetchPC        := s1_fetchPC
-  pipeStage1to2.io.in.bits.exception      := s1_exception
-  pipeStage1to2.io.in.bits.icache         := s1_icacheResp
-  pipeStage1to2.io.in.bits.bpu            := s1_bpuResp
-  pipeStage1to2.io.in.bits.stage1Redirect := stage1Redirect.bits
+  pipeStage1to2.io.in.valid          := s1_fire
+  pipeStage1to2.io.in.bits.fetchPC   := s1_fetchPC
+  pipeStage1to2.io.in.bits.exception := s1_exception
+  pipeStage1to2.io.in.bits.icache    := s1_icacheResp
+  pipeStage1to2.io.in.bits.bpu       := s1_bpuResp
+  pipeStage1to2.io.in.bits.redirect  := s1_redirects.reduce(_ || _)
+  pipeStage1to2.io.in.bits.npc       := stage1Redirect.bits
 
   icacheStage1to2.io.req.valid := s1_fire && !s1_exception.valid && s1_cacop === CACOP_HIT_READ.asUInt
   icacheStage1to2.io.req.bits  := s1_icacheResp
@@ -273,7 +275,8 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   val s2_exception      = WireInit(pipeStage1to2.io.out.bits.exception)
   val s2_icacheResp     = WireInit(icacheStage1to2.io.resp.bits)
   val s2_bpuResp        = WireInit(pipeStage1to2.io.out.bits.bpu)
-  val s2_stage1Redirect = WireInit(pipeStage1to2.io.out.bits.stage1Redirect)
+  val s2_stage1Redirect = WireInit(pipeStage1to2.io.out.bits.redirect)
+  val s2_stage1Npc      = WireInit(pipeStage1to2.io.out.bits.npc)
   val s2_fetchMask      = fetchMask(s2_fetchPC)
   val s2_fetchBundle    = Wire(new FetchBundle)
   val s2_pcs            = VecInit((0 to fetchWidth).map(i => fetchAlign(s2_fetchPC) + (i * instBytes).U))
@@ -308,7 +311,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   )
 
   s2_fetchBundle.pc  := s2_fetchPC
-  s2_fetchBundle.npc := Mux(stage2Redirect.valid, stage2Redirect.bits, s2_stage1Redirect)
+  s2_fetchBundle.npc := Mux(stage2Redirect.valid, stage2Redirect.bits, s2_stage1Npc)
   s2_fetchBundle.pcs := VecInit(s2_pcs.init)
   s2_fetchBundle.insts := VecInit((0 until fetchWidth).map { i =>
     s2_icacheResp((i + 1) * instWidth - 1, i * instWidth)
@@ -316,7 +319,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   s2_fetchBundle.mask := Mux(
     s2_exception.valid,
     UIntToOH(s2_fetchPC(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes))),
-    s2_fetchMask & MaskLower(s2_cfiMask),
+    s2_fetchMask & ~(MaskUpper(s2_cfiMask) << 1.U),
   )
   s2_fetchBundle.brMask       := s2_brMask & s2_fetchBundle.mask
   s2_fetchBundle.bMask        := s2_bMask & s2_fetchBundle.mask
@@ -328,10 +331,11 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   s2_fetchBundle.bpuMeta      := s2_bpuResp.meta
 
   stage2Redirect.valid := pipeStage1to2.io.out.valid && icacheStage1to2.io.resp.valid &&
-    s2_fetchBundle.cfiIdx.valid && stage2Redirect.bits =/= s2_stage1Redirect
+    (stage2Redirect.bits =/= s2_stage1Npc)
   stage2Redirect.bits := MuxCase(
-    s2_stage1Redirect,
+    s2_pcs(fetchWidth),
     Seq(
+      !s2_cfiMask.orR        -> s2_pcs(fetchWidth),
       s2_retMask(s2_cfiIdx)  -> ras.io.read.addr,
       s2_jirlMask(s2_cfiIdx) -> s2_bpuResp.pred(s2_cfiIdx).target.bits,
       s2_bMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(

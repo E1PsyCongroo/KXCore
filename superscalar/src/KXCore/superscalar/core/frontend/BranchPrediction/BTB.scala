@@ -115,8 +115,8 @@ object BTB {
     val updateTag = getTag(io.update.fetchPC)
     val updateWay = io.update.meta.btb
 
-    val maxOffset = Cat(0.B, Fill(offsetWidth - 1, 1.B), Fill(log2Ceil(instBytes), 0.B)).asSInt
-    val minOffset = Cat(1.B, Fill(offsetWidth - 1, 0.B), Fill(log2Ceil(instBytes), 0.B)).asSInt
+    val maxOffset = Cat(0.B, Fill(offsetWidth - 1, 1.B)).asSInt
+    val minOffset = Cat(1.B, Fill(offsetWidth - 1, 0.B)).asSInt
     val newOffset = io.update.target.asSInt -
       (params.fetchAlign(io.update.fetchPC) + (io.update.cfiIdx.bits << log2Ceil(instBytes))).asSInt
     val offsetIsExtended = (newOffset > maxOffset || newOffset < minOffset)
@@ -127,7 +127,7 @@ object BTB {
 
     val updateMetaData = Wire(Vec(fetchWidth, new BTBMeta))
     for (i <- 0 until fetchWidth) {
-      updateMetaData(i).isBr := io.update.brMask
+      updateMetaData(i).isBr := io.update.brMask(i)
       updateMetaData(i).tag  := updateTag
     }
     val updateMetaMask = updateBtbMask | io.update.brMask
@@ -237,7 +237,7 @@ object BTB {
         btb.extended,
         io.req.bits.ebtb,
         params.fetchAlign(io.req.bits.fetchPC) + (i << log2Ceil(instBytes)).U +
-          Sext(Cat(btb.offset, "b00".U(log2Ceil(instBytes).W)), instWidth),
+          Sext(btb.offset, instWidth),
       )
       io.resp.bits.pred(i).isBr  := hits(i) && meta.isBr
       io.resp.bits.pred(i).isJmp := hits(i) && !meta.isBr

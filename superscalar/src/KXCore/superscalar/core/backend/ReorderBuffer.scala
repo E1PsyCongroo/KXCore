@@ -334,7 +334,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   // ROB Head Logic
 
   val finished_committing_row = io.commit.valids.reduce(_ || _) &&
-    (will_commit.asUInt ^ rob_head_vals.asUInt) === 0.U
+    (rob_head_vals.asUInt === will_commit.asUInt) && (rob_head =/= rob_tail)
 
   when(finished_committing_row) {
     rob_head := WrapInc(rob_head, robRowNum)
@@ -354,7 +354,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   // -----------------------------------------------
   // Full/Empty Logic
 
-  full     := (rob_head === rob_tail) && (rob_head_vals.reduce(_ || _))
+  full     := WrapInc(rob_tail, robRowNum) === rob_head
   empty    := (rob_head === rob_tail) && (rob_head_vals.asUInt === 0.U)
   io.empty := empty
 
@@ -368,7 +368,6 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     }
   }
   when(will_commit.reduce(_ || _)) {
-    when(rob_do_unique) { assert(rob_head === rob_tail && PopCount(rob_head_vals) === 1.U) }
     rob_do_unique := false.B
   }
 
@@ -379,6 +378,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   when(rob_flush) {
     rob_head         := 0.U
     rob_tail         := 0.U
+    rob_tail_free    := Fill(coreWidth, 1.B)
     rob_do_unique    := false.B
     rob_xcep_val     := false.B
     rob_redirect_val := false.B

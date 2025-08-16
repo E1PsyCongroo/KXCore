@@ -23,7 +23,7 @@ case class BIMParams(
 case class BTBParams(
     nSets: Int = 128,
     nWays: Int = 2,
-    offsetWidth: Int = 16,
+    offsetWidth: Int = 18,
     extendedNSets: Int = 128,
 ) {
   require(isPow2(nSets))
