@@ -42,7 +42,7 @@ object BTB {
     import frontendParams.{fetchWidth, btbParams}
     import btbParams.{nSets}
 
-    val fileName = s"btb_meta_${nSets}_${fetchWidth}.bin"
+    val fileName = s"btb_meta_${nSets}_${fetchWidth}.mem"
     val hexFile  = new File("build", fileName)
 
     if (!hexFile.exists()) {
@@ -64,7 +64,7 @@ object BTB {
     import frontendParams.{fetchWidth, btbParams}
     import btbParams.{nSets}
 
-    val fileName = s"btb_entry_${nSets}_${fetchWidth}.bin"
+    val fileName = s"btb_entry_${nSets}_${fetchWidth}.mem"
     val hexFile  = new File("build", fileName)
 
     if (!hexFile.exists()) {

@@ -30,7 +30,7 @@ object BIM {
     import frontendParams.{fetchWidth, bimParams}
     import bimParams.{nSets}
 
-    val fileName = s"bim_meta_${nSets}_${fetchWidth}.bin"
+    val fileName = s"bim_meta_${nSets}_${fetchWidth}.mem"
     val hexFile  = new File("build", fileName)
 
     if (!hexFile.exists()) {

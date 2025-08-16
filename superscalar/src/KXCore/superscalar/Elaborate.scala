@@ -15,7 +15,7 @@ object Elaborate extends App {
     "-default-layer-specialization=enable",
   )
 
-  implicit val params: CoreParameters = CoreParameters()
+  implicit val params: CoreParameters = CoreParameters(debug = true, difftest = true)
   circt.stage.ChiselStage.emitSystemVerilogFile(
     new core_top,
     args,

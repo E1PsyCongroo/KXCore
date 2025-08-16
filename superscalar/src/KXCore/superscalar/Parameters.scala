@@ -91,6 +91,7 @@ case class BackendParameters(
 
 case class CoreParameters(
     debug: Boolean = true,
+    difftest: Boolean = true,
 )(
     implicit val commonParams: CommonParameters = CommonParameters(),
     implicit val axiParams: AXIBundleParameters = AXIBundleParameters(),

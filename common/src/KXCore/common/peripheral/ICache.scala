@@ -41,7 +41,7 @@ object ICache {
   ): String = {
     import cacheParams.{nSets, nWays}
 
-    val fileName = s"icache_meta_tag_${nSets}_${nWays}.bin"
+    val fileName = s"icache_meta_tag_${nSets}_${nWays}.mem"
     val hexFile  = new File("build", fileName)
 
     if (!hexFile.exists()) {
