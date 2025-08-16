@@ -41,13 +41,13 @@ class RenameFreeList(
   val allocMask  = selectMask
 
   val comDeallocs      = io.dealloc.map(d => UIntToOH(d.bits)(n - 1, 0) & Fill(n, d.valid)).reduce(_ | _)
-  val rollbackDeallocs = specAllocList & Fill(n, io.rollback)
   val comDespec        = io.despec.map(d => UIntToOH(d.bits)(n - 1, 0) & Fill(n, d.valid)).reduce(_ | _)
-  val deallocMask      = comDeallocs | rollbackDeallocs
+  val rollbackDespec   = specAllocList & Fill(n, io.rollback)
+  val rollbackDeallocs = rollbackDespec & ~comDespec
 
   // Update the free list.
-  freeList      := ((freeList & ~allocMask) | deallocMask) & ~comDespec
-  specAllocList := ((specAllocList | allocMask) & ~deallocMask) & ~comDespec
+  freeList      := (freeList & ~allocMask) | comDeallocs | rollbackDeallocs
+  specAllocList := (specAllocList | allocMask) & ~rollbackDespec & ~comDespec
 
   for (w <- 0 until allocWidth) {
     val valid  = selects(w).orR
@@ -59,8 +59,8 @@ class RenameFreeList(
     io.allocPregs(w).valid := valid && !io.rollback
   }
 
-  io.debug := freeList | io.allocPregs.map(p => UIntToOH(p.bits)(n - 1, 0) & Fill(n, p.valid)).reduce(_ | _)
+  io.debug := freeList
 
-  assert(!(io.debug & deallocMask).orR, "[freelist] Returning a free physical register.")
+  assert(!(io.debug & (comDeallocs | rollbackDeallocs)).orR, "[freelist] Returning a free physical register.")
   assert(!freeList(0), "[freelist] Preg number 0 never be free.")
 }

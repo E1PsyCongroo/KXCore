@@ -54,6 +54,7 @@ class core_top(implicit params: CoreParameters) extends RawModule {
   val ws_valid    = IO(Output(Bool()))
   val rf_rdata    = IO(Output(UInt(commonParams.dataWidth.W)))
   val debug0      = IO(Output(new DebugInfo))
+  val debug1      = IO(Output(new DebugInfo))
 
   val core = withClockAndReset(aclk, !aresetn.asBool) { Module(new Core) }
   core.io.intrpt      := intrpt
@@ -101,4 +102,5 @@ class core_top(implicit params: CoreParameters) extends RawModule {
   ws_valid := core.io.ws_valid
   rf_rdata := core.io.rf_rdata
   debug0   := core.io.debug0
+  debug1   := core.io.debug1
 }

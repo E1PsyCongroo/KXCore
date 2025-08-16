@@ -32,6 +32,7 @@ class CoreIO(implicit params: CoreParameters) extends Bundle {
   val ws_valid    = Output(Bool())
   val rf_rdata    = Output(UInt(dataWidth.W))
   val debug0      = Output(new DebugInfo)
+  val debug1      = Output(new DebugInfo)
 }
 
 class Core(implicit params: CoreParameters) extends Module {
@@ -102,45 +103,84 @@ class Core(implicit params: CoreParameters) extends Module {
   io.ws_valid := false.B
   io.rf_rdata := 0.U
   io.debug0   := 0.U.asTypeOf(new DebugInfo)
+  io.debug1   := 0.U.asTypeOf(new DebugInfo)
 
   if (params.debug) {
     import KXCore.common.Instruction._
     dontTouch(backend.io.debug)
     dontTouch(csr.io.debug)
 
-    val commit_uop = PriorityMux(backend.io.debug.rob_commit.valids, backend.io.debug.rob_commit.uop)
+    val commit_uops = WireInit(backend.io.debug.rob_commit.uop)
 
-    io.debug0.wb_pc       := commit_uop.debug.pc
-    io.debug0.wb_inst     := commit_uop.debug.inst
-    io.debug0.wb_rf_wen   := commit_uop.debug.wen
-    io.debug0.wb_rf_wnum  := commit_uop.debug.wdest
-    io.debug0.wb_rf_wdata := commit_uop.debug.wdata
+    io.debug0.wb_pc       := commit_uops(0).debug.pc
+    io.debug0.wb_inst     := commit_uops(0).debug.inst
+    io.debug0.wb_rf_wen   := commit_uops(0).debug.wen
+    io.debug0.wb_rf_wnum  := commit_uops(0).debug.wdest
+    io.debug0.wb_rf_wdata := commit_uops(0).debug.wdata
+
+    io.debug1.wb_pc       := commit_uops(1).debug.pc
+    io.debug1.wb_inst     := commit_uops(1).debug.inst
+    io.debug1.wb_rf_wen   := commit_uops(1).debug.wen
+    io.debug1.wb_rf_wnum  := commit_uops(1).debug.wdest
+    io.debug1.wb_rf_wdata := commit_uops(1).debug.wdata
 
     if (params.difftest) {
-      val difftestInstrCommit = Module(new DifftestInstrCommit)
-      val difftestGRegState   = Module(new DifftestGRegState)
-      val difftestCSRRegState = Module(new DifftestCSRRegState)
-      val difftestTrapEvent   = Module(new DifftestTrapEvent)
-      val difftestExcpEvent   = Module(new DifftestExcpEvent)
-      val difftestStoreEvent  = Module(new DifftestStoreEvent)
-      val difftestLoadEvent   = Module(new DifftestLoadEvent)
+      val difftestInstrCommit0 = Module(new DifftestInstrCommit)
+      val difftestInstrCommit1 = Module(new DifftestInstrCommit)
+      val difftestGRegState    = Module(new DifftestGRegState)
+      val difftestCSRRegState  = Module(new DifftestCSRRegState)
+      val difftestTrapEvent    = Module(new DifftestTrapEvent)
+      val difftestExcpEvent    = Module(new DifftestExcpEvent)
+      val difftestStoreEvent0  = Module(new DifftestStoreEvent)
+      val difftestStoreEvent1  = Module(new DifftestStoreEvent)
+      val difftestLoadEvent0   = Module(new DifftestLoadEvent)
+      val difftestLoadEvent1   = Module(new DifftestLoadEvent)
 
-      difftestInstrCommit.io.clock          := clock.asBool
-      difftestInstrCommit.io.coreid         := 0.U
-      difftestInstrCommit.io.index          := 0.U
-      difftestInstrCommit.io.valid          := RegNext(backend.io.commit.valid, 0.U)
-      difftestInstrCommit.io.pc             := RegNext(commit_uop.debug.pc, 0.U)
-      difftestInstrCommit.io.instr          := RegNext(commit_uop.debug.inst, 0.U)
-      difftestInstrCommit.io.skip           := RegNext(false.B, false.B)
-      difftestInstrCommit.io.is_TLBFILL     := RegNext(commit_uop.debug.is_TLBFILL, false.B)
-      difftestInstrCommit.io.TLBFILL_index  := RegNext(commit_uop.debug.TLBFILL_index, false.B)
-      difftestInstrCommit.io.is_CNTinst     := RegNext(commit_uop.debug.is_CNTinst, false.B)
-      difftestInstrCommit.io.timer_64_value := RegNext(commit_uop.debug.timer_64_value, 0.U)
-      difftestInstrCommit.io.wen            := RegNext(commit_uop.debug.wen, 0.U)
-      difftestInstrCommit.io.wdest          := RegNext(commit_uop.debug.wdest, 0.U)
-      difftestInstrCommit.io.wdata          := RegNext(commit_uop.debug.wdata, 0.U)
-      difftestInstrCommit.io.csr_rstat      := RegNext(commit_uop.debug.csr_rstat, false.B)
-      difftestInstrCommit.io.csr_data       := RegNext(commit_uop.debug.csr_data, 0.U)
+      val commit_val0 = WireInit(backend.io.debug.rob_commit.valids(0))
+      val commit_uop0 = WireInit(commit_uops(0))
+      val commit_val1 = WireInit(backend.io.debug.rob_commit.valids(1))
+      val commit_uop1 = WireInit(commit_uops(1))
+      when(!backend.io.debug.rob_commit.valids(0) && backend.io.debug.rob_commit.valids(1)) {
+        commit_val0 := backend.io.debug.rob_commit.valids(1)
+        commit_uop0 := commit_uops(1)
+
+        commit_val1 := backend.io.debug.rob_commit.valids(0)
+        commit_uop1 := commit_uops(0)
+      }
+
+      difftestInstrCommit0.io.clock          := clock.asBool
+      difftestInstrCommit0.io.coreid         := 0.U
+      difftestInstrCommit0.io.index          := 0.U
+      difftestInstrCommit0.io.valid          := RegNext(commit_val0, 0.U)
+      difftestInstrCommit0.io.pc             := RegNext(commit_uop0.debug.pc, 0.U)
+      difftestInstrCommit0.io.instr          := RegNext(commit_uop0.debug.inst, 0.U)
+      difftestInstrCommit0.io.skip           := RegNext(false.B, false.B)
+      difftestInstrCommit0.io.is_TLBFILL     := RegNext(commit_uop0.debug.is_TLBFILL, false.B)
+      difftestInstrCommit0.io.TLBFILL_index  := RegNext(commit_uop0.debug.TLBFILL_index, false.B)
+      difftestInstrCommit0.io.is_CNTinst     := RegNext(commit_uop0.debug.is_CNTinst, false.B)
+      difftestInstrCommit0.io.timer_64_value := RegNext(commit_uop0.debug.timer_64_value, 0.U)
+      difftestInstrCommit0.io.wen            := RegNext(commit_uop0.debug.wen, 0.U)
+      difftestInstrCommit0.io.wdest          := RegNext(commit_uop0.debug.wdest, 0.U)
+      difftestInstrCommit0.io.wdata          := RegNext(commit_uop0.debug.wdata, 0.U)
+      difftestInstrCommit0.io.csr_rstat      := RegNext(commit_uop0.debug.csr_rstat, false.B)
+      difftestInstrCommit0.io.csr_data       := RegNext(commit_uop0.debug.csr_data, 0.U)
+
+      difftestInstrCommit1.io.clock          := clock.asBool
+      difftestInstrCommit1.io.coreid         := 0.U
+      difftestInstrCommit1.io.index          := 1.U
+      difftestInstrCommit1.io.valid          := RegNext(commit_val1, 0.U)
+      difftestInstrCommit1.io.pc             := RegNext(commit_uop1.debug.pc, 0.U)
+      difftestInstrCommit1.io.instr          := RegNext(commit_uop1.debug.inst, 0.U)
+      difftestInstrCommit1.io.skip           := RegNext(false.B, false.B)
+      difftestInstrCommit1.io.is_TLBFILL     := RegNext(commit_uop1.debug.is_TLBFILL, false.B)
+      difftestInstrCommit1.io.TLBFILL_index  := RegNext(commit_uop1.debug.TLBFILL_index, false.B)
+      difftestInstrCommit1.io.is_CNTinst     := RegNext(commit_uop1.debug.is_CNTinst, false.B)
+      difftestInstrCommit1.io.timer_64_value := RegNext(commit_uop1.debug.timer_64_value, 0.U)
+      difftestInstrCommit1.io.wen            := RegNext(commit_uop1.debug.wen, 0.U)
+      difftestInstrCommit1.io.wdest          := RegNext(commit_uop1.debug.wdest, 0.U)
+      difftestInstrCommit1.io.wdata          := RegNext(commit_uop1.debug.wdata, 0.U)
+      difftestInstrCommit1.io.csr_rstat      := RegNext(commit_uop1.debug.csr_rstat, false.B)
+      difftestInstrCommit1.io.csr_data       := RegNext(commit_uop1.debug.csr_data, 0.U)
 
       val exception = backend.io.debug.rob_exception
       difftestExcpEvent.io.clock         := clock.asBool
@@ -160,20 +200,35 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestTrapEvent.io.cycleCnt := 0.U
       difftestTrapEvent.io.instrCnt := 0.U
 
-      difftestStoreEvent.io.clock      := clock.asBool
-      difftestStoreEvent.io.coreid     := 0.U
-      difftestStoreEvent.io.index      := 0.U
-      difftestStoreEvent.io.valid      := RegNext(commit_uop.debug.store & Fill(8, backend.io.commit.valid), 0.U)
-      difftestStoreEvent.io.storePAddr := RegNext(commit_uop.debug.storePaddr, 0.U)
-      difftestStoreEvent.io.storeVAddr := RegNext(commit_uop.debug.storeVaddr, 0.U)
-      difftestStoreEvent.io.storeData  := RegNext(commit_uop.debug.storeData, 0.U)
+      difftestStoreEvent0.io.clock      := clock.asBool
+      difftestStoreEvent0.io.coreid     := 0.U
+      difftestStoreEvent0.io.index      := 0.U
+      difftestStoreEvent0.io.valid      := RegNext(commit_uop0.debug.store & Fill(8, commit_val0), 0.U)
+      difftestStoreEvent0.io.storePAddr := RegNext(commit_uop0.debug.storePaddr, 0.U)
+      difftestStoreEvent0.io.storeVAddr := RegNext(commit_uop0.debug.storeVaddr, 0.U)
+      difftestStoreEvent0.io.storeData  := RegNext(commit_uop0.debug.storeData, 0.U)
 
-      difftestLoadEvent.io.clock  := clock.asBool
-      difftestLoadEvent.io.coreid := 0.U
-      difftestLoadEvent.io.index  := 0.U
-      difftestLoadEvent.io.valid  := RegNext(commit_uop.debug.load & Fill(8, backend.io.commit.valid), 0.U)
-      difftestLoadEvent.io.paddr  := RegNext(commit_uop.debug.loadVaddr, 0.U)
-      difftestLoadEvent.io.vaddr  := RegNext(commit_uop.debug.loadPaddr, 0.U)
+      difftestStoreEvent1.io.clock      := clock.asBool
+      difftestStoreEvent1.io.coreid     := 0.U
+      difftestStoreEvent1.io.index      := 1.U
+      difftestStoreEvent1.io.valid      := RegNext(commit_uop1.debug.store & Fill(8, commit_val1), 0.U)
+      difftestStoreEvent1.io.storePAddr := RegNext(commit_uop1.debug.storePaddr, 0.U)
+      difftestStoreEvent1.io.storeVAddr := RegNext(commit_uop1.debug.storeVaddr, 0.U)
+      difftestStoreEvent1.io.storeData  := RegNext(commit_uop1.debug.storeData, 0.U)
+
+      difftestLoadEvent0.io.clock  := clock.asBool
+      difftestLoadEvent0.io.coreid := 0.U
+      difftestLoadEvent0.io.index  := 0.U
+      difftestLoadEvent0.io.valid  := RegNext(commit_uop0.debug.load & Fill(8, commit_val0), 0.U)
+      difftestLoadEvent0.io.paddr  := RegNext(commit_uop0.debug.loadVaddr, 0.U)
+      difftestLoadEvent0.io.vaddr  := RegNext(commit_uop0.debug.loadPaddr, 0.U)
+
+      difftestLoadEvent1.io.clock  := clock.asBool
+      difftestLoadEvent1.io.coreid := 0.U
+      difftestLoadEvent1.io.index  := 1.U
+      difftestLoadEvent1.io.valid  := RegNext(commit_uop1.debug.load & Fill(8, commit_val1), 0.U)
+      difftestLoadEvent1.io.paddr  := RegNext(commit_uop1.debug.loadVaddr, 0.U)
+      difftestLoadEvent1.io.vaddr  := RegNext(commit_uop1.debug.loadPaddr, 0.U)
 
       difftestGRegState.io.clock  := clock.asBool
       difftestGRegState.io.coreid := 0.U
@@ -240,11 +295,14 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestCSRRegState.io.dmw0      := csr.io.debug.dmw0
       difftestCSRRegState.io.dmw1      := csr.io.debug.dmw1
 
-      dontTouch(difftestInstrCommit.io)
+      dontTouch(difftestInstrCommit0.io)
+      dontTouch(difftestInstrCommit1.io)
       dontTouch(difftestExcpEvent.io)
       dontTouch(difftestTrapEvent.io)
-      dontTouch(difftestStoreEvent.io)
-      dontTouch(difftestLoadEvent.io)
+      dontTouch(difftestStoreEvent0.io)
+      dontTouch(difftestStoreEvent1.io)
+      dontTouch(difftestLoadEvent0.io)
+      dontTouch(difftestLoadEvent1.io)
       dontTouch(difftestGRegState.io)
       dontTouch(difftestCSRRegState.io)
     }

@@ -554,9 +554,10 @@ class UniqueExeUnit(
     }
 
     io_csr_resp.bits.uop.debug.is_CNTinst := Seq(CSRType.RDCNTID, CSRType.RDCNTVL, CSRType.RDCNTVH).map(_.asUInt === io_csr_resp.bits.uop.csrCmd).reduce(_ || _)
-    io_csr_resp.bits.uop.debug.wen        := io_csr_resp.bits.uop.ldst =/= 0.U
-    io_csr_resp.bits.uop.debug.wdest      := io_csr_resp.bits.uop.ldst
-    io_csr_resp.bits.uop.debug.wdata      := io_csr_resp.bits.data
+    io_csr_resp.bits.uop.debug.timer_64_value := io_csr_access.cntvh ## io_csr_access.cntvl
+    io_csr_resp.bits.uop.debug.wen            := io_csr_resp.bits.uop.ldst =/= 0.U
+    io_csr_resp.bits.uop.debug.wdest          := io_csr_resp.bits.uop.ldst
+    io_csr_resp.bits.uop.debug.wdata          := io_csr_resp.bits.data
     io_csr_resp.bits.uop.debug.csr_rstat := Seq(CSRType.RD, CSRType.RW, CSRType.XCHG)
       .map(_.asUInt === io_csr_resp.bits.uop.csrCmd)
       .reduce(_ || _) && io_csr_resp.bits.uop.imm === CSRAddr.ESTAT.U

@@ -274,8 +274,7 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     regFile.io.write_ports(i).bits.addr := resp.bits.uop.pdst
     regFile.io.write_ports(i).bits.data := resp.bits.data
 
-    rob.io.write(i)                               := resp
-    rob.io.write(i).bits.uop.debug.timer_64_value := io.csr_access.cntvh ## io.csr_access.cntvl
+    rob.io.write(i) := resp
   }
   rob.io.xcepInfo(0) := memExeUnit.io_mem_xcep
   rob.io.xcepInfo(1) := unqExeUnit.io_csr_xcep.get
@@ -297,8 +296,7 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     regFile.io.write_ports(i + aluStart).bits.addr := resp.bits.uop.pdst
     regFile.io.write_ports(i + aluStart).bits.data := resp.bits.data
 
-    rob.io.write(i + aluStart)                               := resp
-    rob.io.write(i + aluStart).bits.uop.debug.timer_64_value := io.csr_access.cntvh ## io.csr_access.cntvl
+    rob.io.write(i + aluStart) := resp
 
     rob.io.brInfo(i).uop            := resp.bits.uop
     rob.io.brInfo(i).brRecoveryInfo := aluExeUnits(i).io_alu_brInfo
@@ -348,6 +346,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     dontTouch(decData)
     dontTouch(decToRen)
     dontTouch(disData)
+    dontTouch(dis_first_valid)
+    dontTouch(dis_not_fire)
     dontTouch(rob.io)
     dontTouch(dispatcher.io)
     dontTouch(memIssUnit.io)

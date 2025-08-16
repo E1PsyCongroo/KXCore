@@ -68,7 +68,7 @@ case class IssueParams(
 
 case class BackendParameters(
     coreWidth: Int = 2,   // Number of instructions piped per cycle
-    retireWidth: Int = 1, // Number of instructions retired per cycle
+    retireWidth: Int = 2, // Number of instructions retired per cycle
     lregNum: Int = 32,
     pregNum: Int = 80,
     robNum: Int = 32, // Number of entries in the ROB

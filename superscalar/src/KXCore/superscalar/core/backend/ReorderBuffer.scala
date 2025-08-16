@@ -281,12 +281,12 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   var block_commit    = false.B
   var will_throw_xcep = false.B
   var will_redirect   = false.B
-  var block_redirect  = false.B
+  var block_xcep      = false.B
   var commit_count    = 0.U
 
   for (w <- 0 until coreWidth) {
-    will_throw_xcep = will_throw_xcep || (can_throw_xcep(w) && !block_commit && !block_redirect)
-    will_redirect = will_redirect || (can_redirect(w) && !block_commit && !block_redirect)
+    will_throw_xcep = will_throw_xcep || (can_throw_xcep(w) && !block_commit && !block_xcep)
+    will_redirect = will_redirect || can_redirect(w) && !block_commit
     will_commit(w) := can_commit(w) && !can_throw_xcep(w) && !block_commit
 
     commit_count = Mux(will_commit(w), commit_count + 1.U, commit_count)
@@ -294,7 +294,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     if (retireWidth != coreWidth) {
       block_commit = block_commit || (commit_count === retireWidth.U)
     }
-    block_redirect = will_commit(w)
+    block_xcep = will_commit(w)
   }
 
   val redirect_uop = PriorityMux(rob_head_vals, io.commit.uop)
