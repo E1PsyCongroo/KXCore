@@ -14,12 +14,12 @@ trait LA32RCore extends ScalaModule with ScalafixModule { m =>
     "-P:acyclic:force",
   )
   def ivyDeps = Agg(
-    ivy"org.chipsalliance::chisel:7.0.0-RC1",
+    ivy"org.chipsalliance::chisel:7.0.0-RC3",
     ivy"com.lihaoyi:acyclic_2.13.16:0.3.18",
   )
   def compileIvyDeps = Agg(ivy"com.lihaoyi:::acyclic:0.3.18")
   def scalacPluginIvyDeps = Agg(
-    ivy"org.chipsalliance:::chisel-plugin:7.0.0-RC1",
+    ivy"org.chipsalliance:::chisel-plugin:7.0.0-RC3",
     ivy"com.lihaoyi:::acyclic:0.3.18",
   )
   object test extends ScalaTests with TestModule.ScalaTest {

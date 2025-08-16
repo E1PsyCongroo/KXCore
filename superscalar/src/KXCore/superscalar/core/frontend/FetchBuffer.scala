@@ -6,8 +6,6 @@ import chisel3.util._
 import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
-import KXCore.common.Elaborate.commonParams
-import os.read
 
 /** Buffer to hold fetched packets and convert them into a vector of MicroOps to give the Decode stage
   */
@@ -26,92 +24,129 @@ class FetchBuffer(implicit params: CoreParameters) extends Module {
     val flush = Input(Bool())
   })
 
-  val nBanks = fetchWidth / coreWidth
+  val rowNum = fbNum / coreWidth
 
-  val valids = RegInit(VecInit(Seq.fill(fbNum)(0.U(fetchWidth.W))))
-  val uops   = Reg(Vec(fbNum, Vec(fetchWidth, new MicroOp)))
+  val uops    = Reg(Vec(fbNum, new MicroOp))
+  val deq_vec = Wire(Vec(rowNum, Vec(coreWidth, new MicroOp)))
 
-  val head_ptr = RegInit(0.U(log2Ceil(fbNum).W)) // deq_ptr
-  val bank_ptr = RegInit(0.U((1 max log2Ceil(nBanks)).W))
-  val tail_ptr = RegInit(0.U(log2Ceil(fbNum).W)) // enq_ptr
-
-  val maybe_full = valids(head_ptr).orR
-  val full       = (head_ptr === tail_ptr) && maybe_full
-  val empty      = (head_ptr === tail_ptr) && !maybe_full
-
-  val do_enq = io.enq.fire
-  val do_deq = io.deq.fire
+  val head      = RegInit(1.U(rowNum.W)) // deq_ptr one-hot
+  val tail      = RegInit(1.U(fbNum.W))  // enq_ptr one-hot
+  val maybeFull = RegInit(false.B)
 
   // -------------------------------------------------------------
   // **** Enqueue Uops ****
   // -------------------------------------------------------------
-  io.enq.ready := !full
+  // Step 1: Convert FetchPacket into a vector of MicroOps.
+  // Step 2: Generate one-hot write indices.
+  // Step 3: Write MicroOps into the RAM.
+
+  def rotateLeft(in: UInt, k: Int) = {
+    val n = in.getWidth
+    Cat(in(n - k - 1, 0), in(n - 1, n - k))
+  }
+
+  val mightHitHead = (1 until fetchWidth)
+    .map(k => VecInit(rotateLeft(tail, k).asBools.zipWithIndex.filter { case (e, i) => i % coreWidth == 0 }.map { case (e, i) => e }).asUInt)
+    .map(tail => head & tail)
+    .reduce(_ | _)
+    .orR
+  val atHead = (VecInit(
+    tail.asBools.zipWithIndex
+      .filter { case (e, i) => i % coreWidth == 0 }
+      .map { case (e, i) => e },
+  ).asUInt & head).orR
+
+  val do_enq = !(atHead && maybeFull || mightHitHead)
+
+  io.enq.ready := do_enq
 
   val in_mask = Wire(Vec(fetchWidth, Bool()))
   val in_uops = Wire(Vec(fetchWidth, new MicroOp()))
 
   for (i <- 0 until fetchWidth) {
     val pc = io.enq.bits.pcs(i)
-    in_uops(i)            := DontCare
-    in_mask(i)            := io.enq.valid && (io.enq.bits.mask(i) || io.enq.bits.exception.valid)
-    in_uops(i).exception  := io.enq.bits.exception.valid
-    in_uops(i).ecode      := io.enq.bits.exception.bits
-    in_uops(i).badv       := io.enq.bits.pc
+    in_uops(i)      := DontCare
+    in_mask(i)      := io.enq.valid && io.enq.bits.mask(i)
+    in_uops(i).idx  := i.U
+    in_uops(i).inst := io.enq.bits.insts(i)
+
+    in_uops(i).ftqIdx := io.enq.bits.ftqIdx
+    in_uops(i).isBr   := io.enq.bits.brMask(i)
+    in_uops(i).isB    := io.enq.bits.bMask(i)
+    in_uops(i).isJirl := io.enq.bits.jirlMask(i)
+
+    in_uops(i).exception := io.enq.bits.exception.valid
+    in_uops(i).ecode     := io.enq.bits.exception.bits
+    in_uops(i).badv      := io.enq.bits.pc
+
     in_uops(i).debug.pc   := pc
     in_uops(i).debug.inst := io.enq.bits.insts(i)
-    in_uops(i).idx        := i.U
-    in_uops(i).ftqIdx     := io.enq.bits.ftqIdx
-    in_uops(i).inst       := io.enq.bits.insts(i)
   }
 
-  when(do_enq) {
-    valids(tail_ptr) := in_mask.asUInt
-    uops(tail_ptr)   := in_uops
+  // Step 2. Generate one-hot write indices.
+  val enq_idxs = Wire(Vec(fetchWidth, UInt(fbNum.W)))
+
+  def inc(ptr: UInt) = {
+    val n = ptr.getWidth
+    Cat(ptr(n - 2, 0), ptr(n - 1))
+  }
+
+  var enq_idx = tail
+  for (i <- 0 until fetchWidth) {
+    enq_idxs(i) := enq_idx
+    enq_idx = Mux(in_mask(i), inc(enq_idx), enq_idx)
+  }
+
+  // Step 3: Write MicroOps into the RAM.
+  for (i <- 0 until fetchWidth) {
+    for (j <- 0 until fbNum) {
+      when(do_enq && in_mask(i) && enq_idxs(i)(j)) {
+        uops(j) := in_uops(i)
+      }
+    }
   }
 
   // -------------------------------------------------------------
   // **** Dequeue Uops ****
   // -------------------------------------------------------------
 
-  val row_valids = Wire(Vec(nBanks, UInt(coreWidth.W)))
-  val row_uops   = Wire(Vec(nBanks, Vec(coreWidth, new MicroOp)))
-  for (b <- 0 until nBanks) {
-    row_valids(b) := valids(head_ptr)((b + 1) * coreWidth - 1, b * coreWidth)
-    (0 until coreWidth).map { i =>
-      val idx = b * coreWidth + i
-      row_uops(b)(i) := uops(head_ptr)(idx)
-    }
+  val tail_collisions    = VecInit((0 until fbNum).map(i => head(i / coreWidth) && (!maybeFull || (i % coreWidth != 0).B))).asUInt & tail
+  val slot_will_hit_tail = (0 until rowNum).map(i => tail_collisions((i + 1) * coreWidth - 1, i * coreWidth)).reduce(_ | _)
+  val will_hit_tail      = slot_will_hit_tail.orR
+
+  val do_deq = io.deq.ready && !will_hit_tail
+
+  val deq_valids = (~MaskUpper(slot_will_hit_tail)).asBools
+
+  // Generate vec for dequeue read port.
+  for (i <- 0 until fbNum) {
+    deq_vec(i / coreWidth)(i % coreWidth) := uops(i)
   }
 
-  io.deq.valid := row_valids(bank_ptr).orR
-  (0 until coreWidth).map { i =>
-    io.deq.bits.uops(i).valid := row_valids(bank_ptr)(i) && !io.flush
-    io.deq.bits.uops(i).bits  := row_uops(bank_ptr)(i)
-  }
-
-  when(io.deq.fire) {
-    val bank_mask = (0 until nBanks)
-      .map { i => Mux(bank_ptr === i.U, ((1 << coreWidth) - 1).U << (i * coreWidth), 0.U) }
-      .reduce(_ | _)
-    valids(head_ptr) := valids(head_ptr) & ~bank_mask
-  }
+  io.deq.bits.uops zip deq_valids map { case (d, v) => d.valid := v }
+  io.deq.bits.uops zip Mux1H(head, deq_vec) map { case (d, q) => d.bits := q }
+  io.deq.valid := deq_valids.reduce(_ || _)
 
   // -------------------------------------------------------------
   // **** Update State ****
   // -------------------------------------------------------------
 
-  tail_ptr := Mux(do_enq, WrapInc(tail_ptr, fbNum), tail_ptr)
+  when(do_enq) {
+    tail := enq_idx
+    when(in_mask.reduce(_ || _)) {
+      maybeFull := true.B
+    }
+  }
 
-  val next_bank_ptr  = bank_ptr + 1.U
-  val read_next_bank = (!empty && !io.deq.valid) || io.deq.fire
-  bank_ptr := Mux(read_next_bank, next_bank_ptr, bank_ptr)
-  head_ptr := Mux(next_bank_ptr === 0.U && read_next_bank, WrapInc(head_ptr, fbNum), head_ptr)
+  when(do_deq) {
+    head      := inc(head)
+    maybeFull := false.B
+  }
 
   when(io.flush) {
-    head_ptr := 0.U
-    bank_ptr := 0.U
-    tail_ptr := 0.U
-    (0 until fbNum).map { i => valids(i) := 0.U }
+    head      := 1.U
+    tail      := 1.U
+    maybeFull := false.B
   }
 
 }

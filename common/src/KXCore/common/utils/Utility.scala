@@ -85,6 +85,12 @@ object MaskLower {
   }
 }
 
+/** Object to determine whether queue index i0 is older than index i1.
+  */
+object IsOlder {
+  def apply(i0: UInt, i1: UInt, head: UInt) = ((i0 < i1) ^ (i0 < head) ^ (i1 < head))
+}
+
 /** Transpose a matrix of Chisel Vecs.
   */
 object Transpose {

@@ -113,8 +113,19 @@ object FUType extends ChiselEnum {
 }
 
 object CFIType extends ChiselEnum {
-  val CFI_NONE = Value(0.U)
-  val CFI_BR   = Value(1.U)
-  val CFI_B    = Value(2.U)
-  val CFI_JIRL = Value(3.U)
+  val CFI_NONE = Value("b000".U)
+  val CFI_BR   = Value("b001".U)
+  val CFI_B    = Value("b010".U)
+  val CFI_JIRL = Value("b100".U)
+
+  def isBr(cfiType: UInt)   = cfiType(0)
+  def isB(cfiType: UInt)    = cfiType(1)
+  def isJIRL(cfiType: UInt) = cfiType(2)
+}
+
+object REDIRECTType extends ChiselEnum {
+  val REDIRECT_MISPREDICT = Value
+  val REDIRECT_EXCEPTION  = Value
+  val REDIRECT_ETRN       = Value
+  val REDIRECT_NEXT       = Value
 }

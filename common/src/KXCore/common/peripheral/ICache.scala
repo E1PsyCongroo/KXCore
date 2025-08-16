@@ -1,14 +1,16 @@
 package KXCore.common.peripheral
 
+import java.io._
 import chisel3._
+import chisel3.experimental.dataview._
 import chisel3.util._
 import chisel3.util.random._
-import chisel3.experimental.dataview._
+import chisel3.util.experimental._
+import firrtl.annotations.MemoryLoadFileType
 import KXCore.common._
 import KXCore.common.peripheral._
 import KXCore.common.Privilege._
 import KXCore.common.Privilege.CACOPType._
-import firtoolresolver.shaded.coursier.cache.Cache
 
 object ICache {
   def getSet(vaddr: UInt)(implicit cacheParams: CacheParameters): UInt = {
@@ -18,6 +20,7 @@ object ICache {
   def getTag(paddr: UInt)(implicit commonParams: CommonParameters, cacheParams: CacheParameters): UInt = {
     paddr.head(commonParams.paddrWidth - cacheParams.setWidth - cacheParams.blockWidth)
   }
+
   class ICacheMeta(implicit
       commonParams: CommonParameters,
       cacheParams: CacheParameters,
@@ -31,6 +34,30 @@ object ICache {
     val tag   = UInt(tagWidth.W)
   }
 
+  def generateMetaTagHexFile(implicit
+      commonParams: CommonParameters,
+      cacheParams: CacheParameters,
+      axiParams: AXIBundleParameters,
+  ): String = {
+    import cacheParams.{nSets, nWays}
+
+    val fileName = s"icache_meta_tag_${nSets}_${nWays}.bin"
+    val hexFile  = new File("build", fileName)
+
+    if (!hexFile.exists()) {
+      val writer = new PrintWriter(hexFile)
+      try {
+        val entryBits = "0" * (new ICacheMeta).tag.getWidth * nWays
+        for (_ <- 0 until nSets) {
+          writer.println(entryBits)
+        }
+      } finally {
+        writer.close()
+      }
+    }
+    fileName
+  }
+
   class ICacheStorage(implicit
       commonParams: CommonParameters,
       cacheParams: CacheParameters,
@@ -38,9 +65,10 @@ object ICache {
   ) extends Module {
     import commonParams.{vaddrWidth, paddrWidth}
     import cacheParams._
-    private val tagWidth = paddrWidth - setWidth - blockWidth
+    private val metaTagInitFile = generateMetaTagHexFile
 
     val io = IO(new Bundle {
+      val clear = Input(Bool())
       val metaPort = new Bundle {
         val read = new Bundle {
           val en   = Input(Bool())
@@ -70,7 +98,9 @@ object ICache {
       }
     })
 
-    val meta = SyncReadMem(nSets, Vec(nWays, new ICacheMeta))
+    val valids = RegInit(VecInit.fill(nSets)(VecInit.fill(nWays)(false.B)))
+    val tags   = SyncReadMem(nSets, Vec(nWays, UInt((new ICacheMeta).tag.getWidth.W)))
+    loadMemoryFromFileInline(tags, metaTagInitFile, MemoryLoadFileType.Binary)
     val data = Seq.tabulate(nBanks) { _ =>
       (0 until nWays).map { _ =>
         SyncReadMem(nSets, UInt(bankBits.W))
@@ -80,10 +110,24 @@ object ICache {
     assert(!(io.metaPort.read.en && io.metaPort.write.en))
     assert(!(io.dataPort.read.en && io.dataPort.write.en))
 
+    val rtags   = Wire(Vec(nWays, UInt((new ICacheMeta).tag.getWidth.W)))
+    val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)
+
+    io.metaPort.read.data zip rtags zip rvalids foreach { case ((port, tag), valid) =>
+      port.tag   := tag
+      port.valid := valid
+    }
+
+    when(io.clear) {
+      valids.foreach(_.foreach(_ := false.B))
+    }.elsewhen(io.metaPort.write.en) {
+      valids(io.metaPort.write.set)(io.metaPort.write.way) := io.metaPort.write.data.valid
+    }
+
     if (singlePorted) {
-      io.metaPort.read.data := meta.readWrite(
+      rtags := tags.readWrite(
         Mux(io.metaPort.write.en, io.metaPort.write.set, io.metaPort.read.set),
-        VecInit.fill(nWays)(io.metaPort.write.data),
+        VecInit.fill(nWays)(io.metaPort.write.data.tag),
         UIntToOH(io.metaPort.write.way).asBools,
         io.metaPort.read.en || io.metaPort.write.en,
         io.metaPort.write.en,
@@ -103,16 +147,19 @@ object ICache {
         },
       ).asUInt
     } else {
-      io.metaPort.read.data := meta.read(io.metaPort.read.set, io.metaPort.read.en)
-      meta.write(
+      rtags := tags.read(io.metaPort.read.set, io.metaPort.read.en)
+      tags.write(
         io.metaPort.write.set,
-        VecInit.fill(nWays)(io.metaPort.write.data),
+        VecInit.fill(nWays)(io.metaPort.write.data.tag),
         (UIntToOH(io.metaPort.write.way) & Fill(nWays, io.metaPort.write.en)).asBools,
       )
 
       io.dataPort.read.data := VecInit(
         data.map { wayData =>
-          VecInit(wayData.map(_.read(io.dataPort.read.set)))(io.dataPort.read.way)
+          VecInit(wayData.zipWithIndex.map { case (data, w) =>
+            val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
+            data.read(io.dataPort.read.set, wen)
+          })(io.dataPort.read.way)
         },
       ).asUInt
       data.zipWithIndex.foreach { case (wayData, i) =>
@@ -152,10 +199,8 @@ object ICache {
     io.req.ready  := (nextEn === 0.U) || io.flush
     io.resp.valid := en && !io.flush
 
-    val readSet = getSet(Mux(io.req.ready, io.req.bits, io.holdRead))
-
     io.readMeta.en  := io.req.fire || en
-    io.readMeta.set := readSet
+    io.readMeta.set := getSet(Mux(io.req.ready, io.req.bits, io.holdRead))
     io.resp.bits    := io.readMeta.data
   }
 
@@ -343,6 +388,12 @@ object ICache {
         val way  = Output(UInt(wayWidth.W))
         val data = Input(UInt(blockBits.W))
       }
+      val holdRead = Input(new Bundle {
+        val cached       = Bool()
+        val set          = UInt(setWidth.W)
+        val way          = UInt(wayWidth.W)
+        val uncachedRead = UInt(blockBits.W)
+      })
       val req = Flipped(Decoupled(new Bundle {
         val cached       = Bool()
         val set          = UInt(setWidth.W)
@@ -358,11 +409,9 @@ object ICache {
     io.req.ready  := (nextEn === 0.U) || io.flush
     io.resp.valid := en && !io.flush
 
-    val holdReqReg = RegEnable(io.req.bits, io.req.ready)
-
     io.readData.en  := io.req.fire || en
-    io.readData.set := Mux(io.req.ready, io.req.bits.set, holdReqReg.set)
-    io.readData.way := holdReqReg.way
-    io.resp.bits    := Mux(holdReqReg.cached, io.readData.data, holdReqReg.uncachedRead)
+    io.readData.set := Mux(io.req.fire, io.req.bits.set, io.holdRead.set)
+    io.readData.way := Mux(io.req.fire, io.req.bits.way, io.holdRead.way)
+    io.resp.bits    := Mux(io.holdRead.cached, io.readData.data, io.holdRead.uncachedRead)
   }
 }

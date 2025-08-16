@@ -10,8 +10,6 @@ class TLBReq(implicit params: CommonParameters) extends Bundle {
   /** request address from CPU. */
   val vaddr = UInt(params.vaddrWidth.W)
 
-  val size = UInt(2.W) // request size, 0 for 1B, 1 for 2B, 3 for 4B
-
   // /* address space identifier */
   // val asid = UInt(10.W)
 
@@ -122,11 +120,6 @@ class TLB(implicit params: CommonParameters) extends Module {
 
   val tlbEntry = Reg(Vec(params.tlbCount, new TLBEntry))
 
-  def is_unaligned(vaddr: UInt, size: UInt): Bool = {
-    val mask = size
-    (vaddr & mask) =/= 0.U
-  }
-
   def tlb_translate(req: TLBReq, is_fetch: Boolean): TLBResp = {
     val vaddr = req.vaddr
 
@@ -171,22 +164,16 @@ class TLB(implicit params: CommonParameters) extends Module {
       Cat(found.ppn(params.paddrWidth - 13, 0), vaddr(11, 0)),// 4K page
     )
 
-    val unaligned = is_unaligned(vaddr, req.size)
-    dontTouch(unaligned)
-    val tlb_exception_valid = unaligned || !isHit || !found.valid || io.mode.plv > found.plv ||
+    val tlb_exception_valid = !isHit || !found.valid || io.mode.plv > found.plv ||
       (req.isWrite && found.dirty === 0.U) || (is_fetch.B && vaddr(log2Ceil(params.instBytes), 0) =/= 0.U)
     val tlb_exception_ecode =
       Mux(
-        unaligned,
-        if (is_fetch) ECODE.ADEF else ECODE.ALE,
+        !isHit,
+        ECODE.TLBR,
         Mux(
-          !isHit,
-          ECODE.TLBR,
-          Mux(
-            !found.valid,
-            if (is_fetch) ECODE.PIF else Mux(req.isWrite, ECODE.PIS, ECODE.PIL),
-            Mux(io.mode.plv > found.plv, ECODE.PPI, Mux(req.isWrite && found.dirty === 0.U, ECODE.PME, DontCare)),
-          ),
+          !found.valid,
+          if (is_fetch) ECODE.PIF else Mux(req.isWrite, ECODE.PIS, ECODE.PIL),
+          Mux(io.mode.plv > found.plv, ECODE.PPI, Mux(req.isWrite && found.dirty === 0.U, ECODE.PME, DontCare)),
         ),
       ).asUInt
 
@@ -201,18 +188,13 @@ class TLB(implicit params: CommonParameters) extends Module {
 
   def tlb_translate_direct(req: TLBReq, mat: UInt, is_fetch: Boolean): TLBResp = {
     val resp = Wire(new TLBResp)
-    val unaligned = is_unaligned(req.vaddr, req.size)
-    dontTouch(unaligned)
-    resp.exception.valid := unaligned
-    resp.exception.bits  := Mux(unaligned, if (is_fetch) ECODE.ADEF.asUInt else ECODE.ALE.asUInt, 0.U)
+    resp.exception.valid := 0.U
+    resp.exception.bits  := DontCare
     resp.mat             := mat
     resp.paddr           := req.vaddr // passthrough vaddr as paddr for now
     resp
   }
 
-  val unaligned = is_unaligned(io.transReq0.vaddr, io.transReq0.size)
-  dontTouch(unaligned)
-  dontTouch(io.transReq0.size)
   dontTouch(io.transReq0.vaddr)
 
   io.transResp0 := Mux(io.mode.da && !io.mode.pg, tlb_translate_direct(io.transReq0, io.mode.matf, true), tlb_translate(io.transReq0, true))

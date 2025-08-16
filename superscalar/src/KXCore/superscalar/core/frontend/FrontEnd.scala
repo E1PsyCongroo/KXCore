@@ -8,151 +8,235 @@ import KXCore.common.peripheral._
 import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
+import KXCore.superscalar.core.backend._
 
 class FrontEndIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, axiParams, frontendParams}
-  val axi = new AXIBundle(axiParams)
+  import commonParams.{vaddrWidth}
+  import frontendParams.{ftqIdxWidth}
+
+  val axi      = new AXIBundle(axiParams)
+  val itlbReq  = Output(new TLBReq)
+  val itlbResp = Input(new TLBResp)
+
+  val fetchPacket = Decoupled(new FetchBufferResp())
+
+  val icacheClear = Input(Bool())
   val icacheReq = Flipped(Decoupled(new Bundle {
     val cacop = UInt(CACOPType.getWidth.W)
-    val vaddr = UInt(commonParams.vaddrWidth.W)
+    val vaddr = UInt(vaddrWidth.W)
   }))
-  val itlbReq     = Output(new TLBReq)
-  val itlbResp    = Input(new TLBResp)
-  val fetchPacket = Decoupled(new FetchBufferResp())
-  val getPC       = Vec(3, new GetPCFromFtqIO)
-  val commit = Flipped(Valid(new Bundle {
-    val ftqIdx   = UInt(log2Ceil(frontendParams.ftqNum).W)
-    val brUpdate = Valid(new BrUpdateInfo)
-    val redirect = Valid(UInt(commonParams.vaddrWidth.W))
-  }))
+  val ftqReqs  = Input(Vec(3, UInt(ftqIdxWidth.W)))
+  val ftqResps = Output(Vec(3, new FTQInfo))
+
+  val commit = Flipped(Valid(UInt(ftqIdxWidth.W)))
+  val redirect = Input(new Bundle {
+    val valid      = Bool()
+    val target     = UInt(vaddrWidth.W)
+    val ftqIdx     = UInt(ftqIdxWidth.W)
+    val brRecovery = new BrRecoveryInfo
+  })
 }
 
 class FrontEnd(implicit params: CoreParameters) extends Module {
   import params._
-  import commonParams.{vaddrWidth, instWidth, instBytes, pcReset}
+  import commonParams.{vaddrWidth, paddrWidth, instWidth, instBytes, pcReset}
   import frontendParams._
-  import ICache._
+  import CACOPType._
 
   val io = IO(new FrontEndIO)
 
-  val icache = Module(new ICacheStorage()(commonParams, icacheParams, axiParams))
-  val bpu    = Module(new SimpleBranchPredictor)
-  val ras    = Module(new RAS)
+  val icache = Module(new ICache.ICacheStorage()(commonParams, icacheParams, axiParams))
+  val bpu    = Module(new BranchPredictor.BranchPredictorStorage)
   val fb     = Module(new FetchBuffer)
   val ftq    = Module(new FetchTargetQueue)
-  val rasIdx = RegInit(0.U(log2Ceil(rasNum).W))
+
   val flush = Wire(new Bundle {
     val stage1 = Bool()
     val stage2 = Bool()
   })
 
-  val stage1Redirect  = Wire(UInt(vaddrWidth.W))
+  val stage1Redirect  = Wire(Valid(UInt(vaddrWidth.W)))
   val stage2Redirect  = Wire(Valid(UInt(vaddrWidth.W)))
   val backendRedirect = Wire(Valid(UInt(vaddrWidth.W)))
-  backendRedirect.valid := io.commit.valid && io.commit.bits.redirect.valid
-  backendRedirect.bits  := io.commit.bits.redirect.bits
+  backendRedirect.valid := io.redirect.valid
+  backendRedirect.bits  := io.redirect.target
 
   flush.stage1 := backendRedirect.valid || stage2Redirect.valid
   flush.stage2 := backendRedirect.valid
 
-  io.axi          <> icache.io.axi
-  icache.io.flush := flush
-
-  bpu.io.flush  := flush
-  bpu.io.update := ftq.io.bpuUpdate
-
-  io.fetchPacket <> fb.io.deq
-  fb.io.flush    := flush.stage2
-
-  io.getPC(0)              <> ftq.io.getPC(0)
-  io.getPC(1)              <> ftq.io.getPC(1)
-  io.getPC(2)              <> ftq.io.getPC(2)
-  ftq.io.deq.valid         := io.commit.valid
-  ftq.io.deq.bits.idx      := io.commit.bits.ftqIdx
-  ftq.io.deq.bits.redirect := backendRedirect.valid
-  ftq.io.deq.bits.brUpdate := io.commit.bits.brUpdate
-
   // stage0: pre-fetch
-  val stage0Data = Wire(Decoupled(new Bundle {
-    val fetchPC = UInt(vaddrWidth.W)
-  }))
-  val stage0Ready = icache.io.req.stage0.ready && bpu.io.req.stage0.ready && stage0Data.ready
-  val isReset     = RegInit(true.B)
-  val npc = MuxCase(
-    stage1Redirect,
-    Seq(
-      isReset               -> pcReset.U,
-      backendRedirect.valid -> backendRedirect.bits,
-      stage2Redirect.valid  -> stage2Redirect.bits,
+  val icacheCacopReg  = Module(new PipeStageReg(io.icacheReq.bits.cloneType, false))
+  val icacheArb       = Module(new Arbiter(io.icacheReq.bits.cloneType, 2))
+  val icacheStage0to1 = Module(new ICache.ICacheStage0to1()(commonParams, icacheParams, axiParams))
+  val bpuStage0to1    = Module(new BranchPredictor.BranchPredictorStage0to1)
+  val pipeStage0to1 = Module(
+    new PipeStageReg(
+      new Bundle {
+        val fetchPC   = UInt(vaddrWidth.W)
+        val cacop     = UInt(CACOPType.getWidth.W)
+        val cached    = Bool()
+        val paddr     = UInt(paddrWidth.W)
+        val exception = Valid(UInt(ECODE.getWidth.W))
+      },
+      true,
     ),
   )
 
-  isReset := Mux(stage0Ready, false.B, isReset)
+  val s0_fetchPC   = Wire(UInt(vaddrWidth.W))
+  val s0_npc       = RegInit(pcReset.U)
+  val s0_cacop     = WireInit(icacheArb.io.out.bits.cacop)
+  val s0_cached    = io.itlbResp.mat(0)
+  val s0_paddr     = io.itlbResp.paddr
+  val s0_isAdef    = Wire(Bool())
+  val s0_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
+  val s0_fire      = pipeStage0to1.io.in.ready && icacheStage0to1.io.req.ready && bpuStage0to1.io.req.ready
+  s0_fetchPC := MuxCase(
+    s0_npc,
+    Seq(
+      backendRedirect.valid -> backendRedirect.bits,
+      stage2Redirect.valid  -> stage2Redirect.bits,
+      stage1Redirect.valid  -> stage1Redirect.bits,
+    ),
+  )
+  s0_npc := s0_fetchPC
+  s0_isAdef := (icacheArb.io.out.bits.cacop === CACOP_HIT_READ.asUInt) &&
+    (icacheArb.io.out.bits.vaddr(1, 0) =/= 0.U)
+  s0_exception.valid := s0_isAdef ||
+    (Seq(CACOP_HIT_READ, CACOP_HIT_INV).map(_.asUInt === s0_cacop).reduce(_ || _) && io.itlbResp.exception.valid)
+  s0_exception.bits := Mux(s0_isAdef, ECODE.ADEF.asUInt, io.itlbResp.exception.bits)
 
-  icache.io.req.stage0.valid      := stage0Ready
-  icache.io.req.stage0.bits.vaddr := npc
+  icacheStage0to1.io.flush   := flush.stage1
+  bpuStage0to1.io.flush      := flush.stage1
+  pipeStage0to1.io.flush.get := flush.stage1
 
-  bpu.io.req.stage0.valid := stage0Ready
-  bpu.io.req.stage0.bits  := npc
+  icacheStage0to1.io.readMeta <> icache.io.metaPort.read
+  bpuStage0to1.io.bimRead     <> bpu.io.bim
+  bpuStage0to1.io.btbRead     <> bpu.io.btb
 
-  stage0Data.valid        := stage0Ready
-  stage0Data.bits.fetchPC := npc
+  icacheArb.io.in(0).valid      := true.B
+  icacheArb.io.in(0).bits.vaddr := s0_fetchPC
 
-  val stage0to1 = Wire(stage0Data.cloneType)
-  PipeConnect(Some(flush.stage1), stage0Data, stage0to1)
+  icacheCacopReg.io.in <> io.icacheReq
+  icacheArb.io.in(1)   <> icacheCacopReg.io.out
+
+  icacheArb.io.out.ready := s0_fire
+
+  io.itlbReq.isWrite := false.B
+  io.itlbReq.vaddr   := icacheArb.io.out.bits.vaddr
+
+  pipeStage0to1.io.in.valid          := s0_fire
+  pipeStage0to1.io.in.bits.fetchPC   := s0_fetchPC
+  pipeStage0to1.io.in.bits.cacop     := s0_cacop
+  pipeStage0to1.io.in.bits.cached    := s0_cached
+  pipeStage0to1.io.in.bits.paddr     := s0_paddr
+  pipeStage0to1.io.in.bits.exception := s0_exception
+
+  icacheStage0to1.io.req.valid := s0_fire && !s0_exception.valid
+  icacheStage0to1.io.req.bits  := s0_fetchPC
+  icacheStage0to1.io.holdRead  := pipeStage0to1.io.out.bits.fetchPC
+
+  bpuStage0to1.io.req.valid := s0_fire && !s0_exception.valid &&
+    s0_cacop === CACOPType.CACOP_HIT_READ.asUInt
+  bpuStage0to1.io.req.bits := s0_fetchPC
+  bpuStage0to1.io.holdRead := pipeStage0to1.io.out.bits.fetchPC
 
   // stage1: fetch & branch prediction
-  val stage1Data = Wire(Decoupled(new Bundle {
-    val fetchPC        = UInt(vaddrWidth.W)
-    val stage1Redirect = UInt(vaddrWidth.W)
-    val exception      = Valid(UInt(ECODE.getWidth.W))
-  }))
-  val icacheFetchReq = Wire(io.icacheReq.cloneType)
-  val icacheCacopReq = Wire(io.icacheReq.cloneType)
-  val stage1Ready    = icacheFetchReq.ready && stage1Data.ready
-  stage0to1.ready          := stage1Ready
-  bpu.io.resp.stage1.ready := stage1Ready
+  val icacheStage1    = Module(new ICache.ICacheStage1()(commonParams, icacheParams, axiParams))
+  val bpuStage1       = Module(new BranchPredictor.BranchPredictorStage1)
+  val icacheStage1to2 = Module(new ICache.ICacheStage1to2()(commonParams, icacheParams, axiParams))
+  val pipeStage1to2 = Module(
+    new PipeStageReg(
+      new Bundle {
+        val fetchPC   = UInt(vaddrWidth.W)
+        val exception = Valid(UInt(ECODE.getWidth.W))
 
-  PipeConnect(None, io.icacheReq, icacheCacopReq)
-
-  icacheFetchReq.valid      := stage0to1.valid && stage1Ready
-  icacheFetchReq.bits.vaddr := stage0to1.bits.fetchPC
-  icacheFetchReq.bits.cacop := CACOPType.CACOP_HIT_READ.asUInt
-
-  val icacheArb = Module(new Arbiter(io.icacheReq.bits.cloneType, 2))
-  icacheArb.io.in(0)               <> icacheCacopReq
-  icacheArb.io.in(1)               <> icacheFetchReq
-  icache.io.req.stage1.valid       := icacheArb.io.out.valid && !io.itlbResp.exception.valid
-  icacheArb.io.out.ready           := icache.io.req.stage1.ready || io.itlbResp.exception.valid
-  icache.io.req.stage1.bits.vaddr  := icacheArb.io.out.bits.vaddr
-  io.itlbReq.vaddr                 := stage0to1.bits.fetchPC
-  io.itlbReq.isWrite               := false.B
-  io.itlbReq.size                  := "b11".U
-  icache.io.req.stage1.bits.paddr  := io.itlbResp.paddr
-  icache.io.req.stage1.bits.cacop  := icacheArb.io.out.bits.cacop
-  icache.io.req.stage1.bits.cached := io.itlbResp.mat(0)
-
-  val stage1FetchMask = fetchMask(stage0to1.bits.fetchPC)
-  val stage1Redirects = (0 until fetchWidth).map { i =>
-    stage1FetchMask(i) && bpu.io.resp.stage1.bits(i).target.valid &&
-    (bpu.io.resp.stage1.bits(i).isJmp || (bpu.io.resp.stage1.bits(i).isBr && bpu.io.resp.stage1.bits(i).taken))
-  }
-  stage1Redirect := Mux(
-    stage1Redirects.reduce(_ || _),
-    bpu.io.resp.stage1.bits(PriorityEncoder(stage1Redirects)).target.bits,
-    nextFetch(stage0to1.bits.fetchPC),
+        val icache = new Bundle {
+          val cached       = Bool()
+          val set          = UInt(icacheParams.setWidth.W)
+          val way          = UInt(icacheParams.wayWidth.W)
+          val uncachedRead = UInt(icacheParams.blockBits.W)
+        }
+        val bpu = new Bundle {
+          val pred = Vec(fetchWidth, new BranchPrediction)
+          val meta = new Bundle {
+            val bim = Vec(fetchWidth, UInt(2.W))
+            val btb = UInt(log2Ceil(btbParams.nWays).W)
+          }
+        }
+        val stage1Redirect = UInt(vaddrWidth.W)
+      },
+      true,
+    ),
   )
 
-  stage1Data.valid               := stage0to1.valid && bpu.io.resp.stage1.valid && stage1Ready
-  stage1Data.bits.fetchPC        := stage0to1.bits.fetchPC
-  stage1Data.bits.stage1Redirect := stage1Redirect
-  stage1Data.bits.exception      := io.itlbResp.exception
+  val s1_fetchPC    = WireInit(pipeStage0to1.io.out.bits.fetchPC)
+  val s1_cacop      = WireInit(pipeStage0to1.io.out.bits.cacop)
+  val s1_cached     = WireInit(pipeStage0to1.io.out.bits.cached)
+  val s1_paddr      = WireInit(pipeStage0to1.io.out.bits.paddr)
+  val s1_exception  = WireInit(pipeStage0to1.io.out.bits.exception)
+  val s1_icacheResp = WireInit(icacheStage1.io.resp.bits)
+  val s1_bpuResp    = WireInit(bpuStage1.io.resp.bits)
+  val s1_fire = pipeStage0to1.io.out.valid && Mux(
+    pipeStage0to1.io.out.bits.exception.valid,
+    pipeStage1to2.io.in.ready,
+    Mux(
+      pipeStage0to1.io.out.bits.cacop =/= CACOP_HIT_READ.asUInt,
+      icacheStage0to1.io.resp.valid && icacheStage1.io.req.ready,
+      icacheStage1.io.resp.valid && bpuStage1.io.resp.valid && icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready,
+    ),
+  )
 
-  val stage1to2 = Wire(stage1Data.cloneType)
-  PipeConnect(Some(flush.stage2), stage1Data, stage1to2)
+  pipeStage0to1.io.out.ready    := s1_fire
+  icacheStage0to1.io.resp.ready := s1_fire
+  bpuStage0to1.io.resp.ready    := s1_fire
+
+  icacheStage1to2.io.flush   := flush.stage2
+  pipeStage1to2.io.flush.get := flush.stage2
+
+  icacheStage1.io.axi       <> io.axi
+  icacheStage1.io.metaWrite <> icache.io.metaPort.write
+  icacheStage1.io.dataWrite <> icache.io.dataPort.write
+
+  icacheStage1.io.req.valid       := pipeStage0to1.io.out.valid && icacheStage0to1.io.req.valid
+  icacheStage1.io.req.bits.vaddr  := s1_fetchPC
+  icacheStage1.io.req.bits.cacop  := s1_cacop
+  icacheStage1.io.req.bits.cached := s1_cached
+  icacheStage1.io.req.bits.paddr  := s1_paddr
+  icacheStage1.io.req.bits.meta   := icacheStage0to1.io.resp.bits
+
+  bpuStage1.io.req.valid            := pipeStage0to1.io.out.valid && bpuStage0to1.io.req.valid
+  bpuStage1.io.req.bits.bim         := bpuStage0to1.io.resp.bits.bim
+  bpuStage1.io.req.bits.btb.fetchPC := s1_fetchPC
+  bpuStage1.io.req.bits.btb.meta    := bpuStage0to1.io.resp.bits.btb.meta
+  bpuStage1.io.req.bits.btb.btb     := bpuStage0to1.io.resp.bits.btb.btb
+  bpuStage1.io.req.bits.btb.ebtb    := bpuStage0to1.io.resp.bits.btb.ebtb
+
+  val s1_fetchMask = fetchMask(s1_fetchPC)
+  val s1_redirects = (0 until fetchWidth).map { i =>
+    s1_fetchMask(i) && s1_bpuResp.pred(i).target.valid &&
+    (s1_bpuResp.pred(i).isJmp ||
+      (s1_bpuResp.pred(i).isBr && s1_bpuResp.pred(i).taken))
+  }
+  stage1Redirect.valid := bpuStage1.io.resp.valid
+  stage1Redirect := Mux(
+    s1_redirects.reduce(_ || _),
+    s1_bpuResp.pred(PriorityEncoder(s1_redirects)).target.bits,
+    nextFetch(s1_fetchPC),
+  )
+
+  pipeStage1to2.io.in.valid               := s1_fire
+  pipeStage1to2.io.in.bits.fetchPC        := s1_fetchPC
+  pipeStage1to2.io.in.bits.exception      := s1_exception
+  pipeStage1to2.io.in.bits.icache         := s1_icacheResp
+  pipeStage1to2.io.in.bits.bpu            := s1_bpuResp
+  pipeStage1to2.io.in.bits.stage1Redirect := stage1Redirect.bits
+
+  icacheStage1to2.io.req.valid := s1_fire && !s1_exception.valid && s1_cacop === CACOP_HIT_READ.asUInt
+  icacheStage1to2.io.req.bits  := s1_icacheResp
+  icacheStage1to2.io.holdRead  := pipeStage1to2.io.out.bits.icache
 
   // stage2: pre-decode
-  ras.io.read.idx := WrapDec(rasIdx, rasNum)
   def isBr(inst: UInt): Bool = {
     import Instruction._
     Seq(BEQ, BNE, BLT, BGE, BLTU, BGEU).map(_.inst === inst).reduce(_ || _)
@@ -175,77 +259,98 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   def isRet(inst: UInt): Bool = {
     inst === Instruction.JIRL.inst && inst(4, 0) === 0.U && inst(9, 5) === 1.U && inst(25, 10) === 0.U
   }
-  val stage2FetchMask   = fetchMask(stage1to2.bits.fetchPC)
-  val stage2FetchBundle = Wire(new FetchBundle)
-  val stage2PCs         = VecInit((0 to fetchWidth).map(i => fetchAlign(stage1to2.bits.fetchPC) + (i * instBytes).U))
-  stage2FetchBundle.pc    := stage1to2.bits.fetchPC
-  stage2FetchBundle.npc   := Mux(stage2Redirect.valid, stage2Redirect.bits, stage1to2.bits.stage1Redirect)
-  stage2FetchBundle.pcs   := VecInit(stage2PCs.init)
-  stage2FetchBundle.insts := VecInit((0 until fetchWidth).map(i => icache.io.resp.stage2.bits.data((i + 1) * instWidth - 1, i * instWidth)))
 
-  val stage2BrMask   = VecInit(stage2FetchBundle.insts.map(isBr(_))).asUInt
-  val stage2BMask    = VecInit(stage2FetchBundle.insts.map(isB(_))).asUInt
-  val stage2JIRLMask = VecInit(stage2FetchBundle.insts.map(isJIRL(_))).asUInt
-  val stage2JmpMask  = VecInit(stage2FetchBundle.insts.map(isJmp(_))).asUInt
-  val stage2CallMask = VecInit(stage2FetchBundle.insts.map(isCall(_))).asUInt
-  val stage2RetMask  = VecInit(stage2FetchBundle.insts.map(isRet(_))).asUInt
-  val stage2CfiMask = PriorityEncoderOH(VecInit((0 until fetchWidth).map { i =>
-    stage2FetchMask(i) && (stage2JmpMask(i) || (stage2BrMask(i) && bpu.io.resp.stage2.bits.pred(i).taken))
+  val ras    = Module(new RAS)
+  val rasIdx = RegInit(0.U(log2Ceil(rasNum).W))
+
+  val s2_fetchPC        = WireInit(pipeStage1to2.io.out.bits.fetchPC)
+  val s2_exception      = WireInit(pipeStage1to2.io.out.bits.exception)
+  val s2_icacheResp     = WireInit(icacheStage1to2.io.resp.bits)
+  val s2_bpuResp        = WireInit(pipeStage1to2.io.out.bits.bpu)
+  val s2_stage1Redirect = WireInit(pipeStage1to2.io.out.bits.stage1Redirect)
+  val s2_fetchMask      = fetchMask(s2_fetchPC)
+  val s2_fetchBundle    = Wire(new FetchBundle)
+  val s2_pcs            = VecInit((0 to fetchWidth).map(i => fetchAlign(s2_fetchPC) + (i * instBytes).U))
+  val s2_brMask         = VecInit(s2_fetchBundle.insts.map(isBr(_))).asUInt
+  val s2_bMask          = VecInit(s2_fetchBundle.insts.map(isB(_))).asUInt
+  val s2_jirlMask       = VecInit(s2_fetchBundle.insts.map(isJIRL(_))).asUInt
+  val s2_jmpMask        = VecInit(s2_fetchBundle.insts.map(isJmp(_))).asUInt
+  val s2_callMask       = VecInit(s2_fetchBundle.insts.map(isCall(_))).asUInt
+  val s2_retMask        = VecInit(s2_fetchBundle.insts.map(isRet(_))).asUInt
+  val s2_cfiMask = PriorityEncoderOH(VecInit((0 until fetchWidth).map { i =>
+    s2_fetchMask(i) && (s2_jmpMask(i) || (s2_brMask(i) && s2_bpuResp.pred(i).taken))
   }).asUInt)
-  val stage2CfiIdx = OHToUInt(stage2CfiMask)
-  stage2FetchBundle.mask      := stage2FetchMask & ~(MaskUpper(stage2CfiMask) << 1.U)
-  stage2FetchBundle.exception := stage1to2.bits.exception
-  dontTouch(stage2CfiMask)
-  dontTouch(stage2CfiIdx)
+  val s2_cfiIdx = OHToUInt(s2_cfiMask)
+  val s2_fire = pipeStage1to2.io.out.valid && (icacheStage1to2.io.resp.valid || s2_exception.valid) &&
+    fb.io.enq.ready && ftq.io.enq.ready
 
-  stage2FetchBundle.cfiIdx.valid := stage2CfiMask.orR
-  stage2FetchBundle.cfiIdx.bits  := stage2CfiIdx
-  stage2FetchBundle.ftqIdx       := ftq.io.enqIdx
-  stage2FetchBundle.bpuMeta      := bpu.io.resp.stage2.bits.meta
+  pipeStage1to2.io.out.ready    := s2_fire
+  icacheStage1to2.io.resp.ready := s2_fire
 
-  val stage2Data = Wire(Decoupled(stage2FetchBundle.cloneType))
-  val stage2Fire = fb.io.enq.ready && ftq.io.enq.ready && stage2Data.valid
-  stage2Data.valid            := ((bpu.io.resp.stage2.valid && icache.io.resp.stage2.valid) || stage1to2.bits.exception.valid) && stage1to2.valid
-  bpu.io.resp.stage2.ready    := stage2Fire
-  icache.io.resp.stage2.ready := stage2Fire
-  stage1to2.ready             := stage2Fire
-  stage2Data.bits             := stage2FetchBundle
+  ras.io.read.idx := WrapDec(rasIdx, rasNum)
 
-  stage2Redirect.valid := stage2Data.valid && stage2Data.bits.cfiIdx.valid &&
-    stage2Redirect.bits =/= stage1to2.bits.stage1Redirect
+  s2_fetchBundle.pc  := s2_fetchPC
+  s2_fetchBundle.npc := Mux(stage2Redirect.valid, stage2Redirect.bits, s2_stage1Redirect)
+  s2_fetchBundle.pcs := VecInit(s2_pcs.init)
+  s2_fetchBundle.insts := VecInit((0 until fetchWidth).map { i =>
+    s2_icacheResp((i + 1) * instWidth - 1, i * instWidth)
+  })
+  s2_fetchBundle.mask := Mux(
+    s2_exception.valid,
+    UIntToOH(s2_fetchPC(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes))),
+    s2_fetchMask & MaskLower(s2_cfiMask),
+  )
+  s2_fetchBundle.brMask       := s2_brMask & s2_fetchBundle.mask
+  s2_fetchBundle.bMask        := s2_bMask & s2_fetchBundle.mask
+  s2_fetchBundle.jirlMask     := s2_jirlMask & s2_fetchBundle.mask
+  s2_fetchBundle.cfiIdx.valid := s2_cfiMask.orR
+  s2_fetchBundle.cfiIdx.bits  := s2_cfiIdx
+  s2_fetchBundle.ftqIdx       := ftq.io.enqIdx
+  s2_fetchBundle.exception    := s2_exception
+  s2_fetchBundle.bpuMeta      := s2_bpuResp.meta
+
+  stage2Redirect.valid := pipeStage1to2.io.out.valid && icacheStage1to2.io.resp.valid &&
+    s2_fetchBundle.cfiIdx.valid && stage2Redirect.bits =/= s2_stage1Redirect
   stage2Redirect.bits := MuxCase(
-    stage1to2.bits.stage1Redirect,
+    s2_stage1Redirect,
     Seq(
-      stage2RetMask(stage2CfiIdx)  -> ras.io.read.addr,
-      stage2JIRLMask(stage2CfiIdx) -> bpu.io.resp.stage2.bits.pred(stage2CfiIdx).target.bits,
-      stage2BMask(stage2CfiIdx) -> (stage2Data.bits
-        .pcs(stage2CfiIdx) + Sext(Cat(stage2Data.bits.insts(stage2CfiIdx)(9, 0), stage2Data.bits.insts(stage2CfiIdx)(25, 10), 0.U(2.W)), 32)),
-      stage2BrMask(stage2CfiIdx) -> (stage2Data.bits.pcs(stage2CfiIdx) + Sext(Cat(stage2Data.bits.insts(stage2CfiIdx)(25, 10), 0.U(2.W)), 32)),
+      s2_retMask(s2_cfiIdx)  -> ras.io.read.addr,
+      s2_jirlMask(s2_cfiIdx) -> s2_bpuResp.pred(s2_cfiIdx).target.bits,
+      s2_bMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(
+        Cat(s2_fetchBundle.insts(s2_cfiIdx)(9, 0), s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)),
+        32,
+      )),
+      s2_brMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(Cat(s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)), 32)),
     ),
   )
 
-  ras.io.write.valid := stage2Data.fire && stage2Data.bits.cfiIdx.valid && stage2CallMask(stage2CfiIdx)
+  ras.io.write.valid := s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)
   ras.io.write.idx   := rasIdx
-  ras.io.write.addr  := stage2PCs(stage2Data.bits.cfiIdx.bits +& 1.U)
+  ras.io.write.addr  := s2_pcs(s2_cfiIdx +& 1.U)
   rasIdx := MuxCase(
     rasIdx,
     Seq(
-      (stage2Data.fire && stage2RetMask(stage2CfiIdx))  -> WrapDec(rasIdx, rasNum),
-      (stage2Data.fire && stage2CallMask(stage2CfiIdx)) -> WrapInc(rasIdx, rasNum),
+      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_retMask(s2_cfiIdx))  -> WrapDec(rasIdx, rasNum),
+      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)) -> WrapInc(rasIdx, rasNum),
     ),
   )
 
-  stage2Data.ready := stage2Fire
-  fb.io.enq.valid  := stage2Fire
-  fb.io.enq.bits   := stage2Data.bits
-  ftq.io.enq.valid := stage2Fire
-  ftq.io.enq.bits  := stage2Data.bits
+  fb.io.enq.valid  := s2_fire
+  fb.io.enq.bits   := s2_fetchBundle
+  ftq.io.enq.valid := s2_fire
+  ftq.io.enq.bits  := s2_fetchBundle
 
-  dontTouch(stage0to1)
-  dontTouch(stage1Data)
-  dontTouch(stage1to2)
-  dontTouch(stage2Data)
+  // to bankend
+  icache.io.clear            := io.icacheClear
+  io.fetchPacket             <> fb.io.deq
+  ftq.io.deq                 := io.commit
+  ftq.io.redirect.valid      := io.redirect.valid
+  ftq.io.redirect.idx        := io.redirect.ftqIdx
+  ftq.io.redirect.brRecovery := io.redirect.brRecovery
+  ftq.io.reqs                := io.ftqReqs
+  io.ftqResps                := ftq.io.resps
+
   dontTouch(stage1Redirect)
   dontTouch(stage2Redirect)
-  dontTouch(stage2FetchBundle)
+  dontTouch(s2_fetchBundle)
 }

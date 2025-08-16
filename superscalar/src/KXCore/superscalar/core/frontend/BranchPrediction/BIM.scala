@@ -1,19 +1,18 @@
 package KXCore.superscalar.core.frontend
 
+import java.io._
 import chisel3._
 import chisel3.util._
 import chisel3.util.random._
+import chisel3.util.experimental._
+import firrtl.annotations.MemoryLoadFileType
+import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
 
-class BIM(implicit params: CoreParameters) extends Module {
-  import params._
-  import commonParams.{vaddrWidth}
-  import frontendParams._
-  import bimParams._
-
-  def getSet(fetchPC: UInt): UInt = {
-    fetchIdx(fetchPC)(log2Ceil(nSets) - 1, 0)
+object BIM {
+  def getSet(fetchPC: UInt)(implicit params: CoreParameters): UInt = {
+    params.fetchIdx(fetchPC)(log2Ceil(params.frontendParams.bimParams.nSets) - 1, 0)
   }
 
   def bimWrite(v: UInt, taken: Bool): UInt = {
@@ -23,64 +22,108 @@ class BIM(implicit params: CoreParameters) extends Module {
   }
 
   class BIMMeta(implicit params: CoreParameters) extends Bundle {
-    val bims = Vec(fetchWidth, UInt(2.W))
+    val bims = Vec(params.frontendParams.fetchWidth, UInt(2.W))
   }
 
-  class BIMStage0to1 extends Module {
-    val io = IO(new Bundle {
-      val flush  = Input(Bool())
-      val req    = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val resp   = Decoupled(new BIMMeta)
-      val update = Flipped(Valid(new BranchPredictionUpdate))
-    })
+  def generateMetaHexFile(implicit params: CoreParameters): String = {
+    import params.{frontendParams}
+    import frontendParams.{fetchWidth, bimParams}
+    import bimParams.{nSets}
 
-    val doingReset = RegInit(true.B)
-    val resetIdx   = RegInit(0.U(log2Ceil(nSets).W))
-    resetIdx := resetIdx + doingReset
-    when(resetIdx === (nSets - 1).U) { doingReset := false.B }
+    val fileName = s"bim_meta_${nSets}_${fetchWidth}.bin"
+    val hexFile  = new File("build", fileName)
+
+    if (!hexFile.exists()) {
+      val writer = new PrintWriter(hexFile)
+      try {
+        val entryBits = "10" * fetchWidth
+        for (_ <- 0 until nSets) {
+          writer.println(entryBits)
+        }
+      } finally {
+        writer.close()
+      }
+    }
+    fileName
+  }
+
+  class BIMStorage(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth}
+    import frontendParams._
+    import bimParams._
+    private val metaInitFile = generateMetaHexFile
+
+    val io = IO(new Bundle {
+      val read = new Bundle {
+        val en   = Input(Bool())
+        val set  = Input(UInt(log2Ceil(nSets).W))
+        val data = Output(new BIMMeta)
+      }
+      val update = Flipped(new BranchPredictionUpdate)
+    })
+    val metas = SyncReadMem(nSets, Vec(fetchWidth, UInt(2.W)))
+    loadMemoryFromFileInline(metas, metaInitFile, MemoryLoadFileType.Binary)
+
+    val updateSet   = getSet(io.update.fetchPC)
+    val updateWdata = Wire(Vec(fetchWidth, UInt(2.W)))
+    val updateWmask = Wire(Vec(fetchWidth, Bool()))
+    val updateMeta  = io.update.meta.bim
+    val bypass      = Reg(Vec(fetchWidth, Bool()))
+
+    for (w <- 0 until fetchWidth) {
+      val isTaken = io.update.cfiIdx.valid && io.update.cfiIdx.bits === w.U
+      updateWmask(w) := io.update.brMask(w) || isTaken
+      updateWdata(w) := bimWrite(updateMeta(w), isTaken)
+      when(updateWmask(w)) {
+        bypass(w) := updateWdata(w)
+      }.otherwise {
+        bypass(w) := updateMeta(w)
+      }
+    }
+
+    when(io.update.valid) {
+      metas.write(updateSet, updateWdata, updateWmask)
+    }
+
+    io.read.data := Mux(io.read.set === updateSet, bypass, metas.read(io.read.set, io.read.en))
+  }
+
+  class BIMStage0to1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth}
+    import frontendParams._
+    import bimParams._
+
+    val io = IO(new Bundle {
+      val flush = Input(Bool())
+      val metaRead = new Bundle {
+        val en   = Output(Bool())
+        val set  = Output(UInt(log2Ceil(nSets).W))
+        val data = Input(new BIMMeta)
+      }
+      val holdRead = Input(UInt(vaddrWidth.W))
+      val req      = Flipped(Decoupled(UInt(vaddrWidth.W)))
+      val resp     = Decoupled(new BIMMeta)
+    })
 
     val en     = RegInit(false.B)
     val nextEn = WireDefault(en & ~io.resp.ready)
     en            := Mux(io.req.ready, io.req.valid, nextEn)
-    io.req.ready  := ((nextEn === 0.U) || io.flush) && !doingReset
+    io.req.ready  := (nextEn === 0.U) || io.flush
     io.resp.valid := en && !io.flush
 
-    val holdReqReg = RegEnable(io.req.bits, io.req.ready)
-    val readSet    = getSet(Mux(io.req.ready, io.req.bits, holdReqReg))
-
-    val metas = SyncReadMem(nSets, Vec(fetchWidth, UInt(2.W)))
-    val bims  = metas.read(readSet)
-
-    val updateWdata = Wire(Vec(fetchWidth, UInt(2.W)))
-    val updateWmask = Wire(Vec(fetchWidth, Bool()))
-    val updateBits  = io.update.bits
-    val updateIndex = getSet(updateBits.fetchPC)
-    val updateMeta  = updateBits.meta.bim
-
-    for (w <- 0 until fetchWidth) {
-      updateWmask(w) := false.B
-      updateWdata(w) := 2.U
-
-      // TODO: fix this logic
-      when(io.update.valid && io.update.bits.cfiIdx === w.U) {
-        val isTaken = io.update.bits.cfiTaken
-        updateWmask(w) := true.B
-        updateWdata(w) := bimWrite(updateMeta(w), isTaken)
-      }
-    }
-
-    when(doingReset || io.update.valid) {
-      metas.write(
-        Mux(doingReset, resetIdx, updateIndex),
-        Mux(doingReset, VecInit(Seq.fill(fetchWidth) { 2.U }), updateWdata),
-        Mux(doingReset, Fill(fetchWidth, true.B), updateWmask.asUInt).asBools,
-      )
-    }
-
-    io.resp.bits.bims := bims
+    io.metaRead.en    := io.req.fire || en
+    io.metaRead.set   := getSet(Mux(io.req.fire, io.req.bits, io.holdRead))
+    io.resp.bits.bims := io.metaRead.data
   }
 
-  class BIMStage1 extends Module {
+  class BIMStage1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth}
+    import frontendParams._
+    import bimParams._
+
     val io = IO(new Bundle {
       val req = Flipped(Decoupled(new BIMMeta))
       val resp = Decoupled(new Bundle {
@@ -97,24 +140,4 @@ class BIM(implicit params: CoreParameters) extends Module {
       io.resp.bits.meta(i)       := io.req.bits.bims(i)
     }
   }
-
-  val io = IO(new Bundle {
-    val flush = Input(Bool())
-    val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
-    val resp = Decoupled(new Bundle {
-      val pred = Vec(fetchWidth, new BranchPrediction)
-      val meta = Vec(fetchWidth, UInt(2.W))
-    })
-    val update = Flipped(Valid(new BranchPredictionUpdate))
-  })
-
-  val stage0to1 = Module(new BIMStage0to1)
-  val stage1    = Module(new BIMStage1)
-
-  stage0to1.io.flush  := io.flush
-  stage0to1.io.update := io.update
-
-  io.req         <> stage0to1.io.req
-  stage1.io.req  <> stage0to1.io.resp
-  stage1.io.resp <> io.resp
 }

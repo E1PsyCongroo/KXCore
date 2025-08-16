@@ -3,13 +3,12 @@ package KXCore.superscalar.core.backend
 import chisel3._
 import chisel3.util._
 import KXCore.common._
+import KXCore.common.Privilege._
 import KXCore.common.utils._
 import KXCore.common.peripheral._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
 import KXCore.superscalar.core.frontend._
-import dataclass.data
-import KXCore.superscalar.EXUType.isCSR
 
 abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   def fu_types: UInt = 0.U(FUType.getWidth.W)
@@ -31,37 +30,34 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
     io_read_reqs(1).bits  := iss_uop_ext.bits.prs2
   }
 
-  val stage0Regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  stage0Regs.valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy &&
+  val s0_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
+  s0_regs.valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy &&
     io_read_reqs.map(req => (!req.valid || req.ready)).reduce(_ && _)
-  stage0Regs.bits(0) := io_read_resps(0)
+  s0_regs.bits(0) := io_read_resps(0)
   if (nReaders == 2) {
-    stage0Regs.bits(1) := io_read_resps(1)
+    s0_regs.bits(1) := io_read_resps(1)
   }
-  iss_uop_ext.ready(0) := stage0Regs.ready
+  iss_uop_ext.ready(0) := s0_regs.fire
 
-  val stage0Uop = Wire(Decoupled(new MicroOp))
-  stage0Uop.valid      := iss_uop_ext.valid(1) && iss_uop_ext.bits.busy
-  stage0Uop.bits       := iss_uop_ext.bits
-  iss_uop_ext.ready(1) := stage0Uop.ready
+  val s0_uop = Wire(Decoupled(new MicroOp))
+  s0_uop.valid         := iss_uop_ext.valid(1)
+  s0_uop.bits          := iss_uop_ext.bits
+  iss_uop_ext.ready(1) := s0_uop.ready
 
-  val stage0to1Regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  PipeConnect(Some(io_kill), stage0Regs, stage0to1Regs)
+  val s1_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
+  PipeConnect(Some(io_kill), s0_regs, s1_regs)
 
-  val stage0to1Uop = Wire(Decoupled(new MicroOp))
-  PipeConnect(Some(io_kill), stage0Uop, stage0to1Uop)
-
-  val stage1Regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  stage1Regs.valid    := stage0to1Regs.valid
-  stage1Regs.bits     := stage0to1Regs.bits
-  stage0to1Regs.ready := stage1Regs.ready
-
-  val stage1Uop = Wire(Decoupled(new MicroOp))
-  stage1Uop.valid    := stage0to1Uop.valid
-  stage1Uop.bits     := stage0to1Uop.bits
-  stage0to1Uop.ready := stage1Uop.ready
+  val s1_uop = Wire(Decoupled(new MicroOp))
+  PipeConnect(Some(io_kill), s0_uop, s1_uop)
 
   io_fu_types := fu_types
+
+  if (params.debug) {
+    dontTouch(s0_uop)
+    dontTouch(s0_regs)
+    dontTouch(s1_uop)
+    dontTouch(s1_regs)
+  }
 }
 
 class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
@@ -77,66 +73,74 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val io_dtlb_resp = IO(Input(new TLBResp()(commonParams)))
   val io_axi       = IO(new AXIBundle(params.axiParams))
 
-  val isWrite = Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === stage1Uop.bits.lsuCmd).reduce(_ || _)
-  // io_dtlb_req.asid    := 0.U
-  io_dtlb_req.isWrite := isWrite
-  // io_dtlb_req.plv     := 0.U
-  io_dtlb_req.vaddr := stage1Regs.bits(0) + stage1Uop.bits.imm
-  io_dtlb_req.size := Mux(
-    isWrite,
-    MuxLookup(stage1Uop.bits.lsuCmd, 0.U)(
-      Seq(
-        LSU_STB.asUInt -> 0.U,
-        LSU_STH.asUInt -> 1.U,
-        LSU_STW.asUInt -> 3.U,
-      ),
+  val s1_isWrite   = isStore(s1_uop.bits.lsuCmd)
+  val s1_vaddr     = s1_regs.bits(0) + s1_uop.bits.imm
+  val s1_writeData = s1_regs.bits(1) << (s1_vaddr(1, 0) ## 0.U(3.W))
+  val s1_paddr     = io_dtlb_resp.paddr
+  val s1_wmask = MuxLookup(s1_uop.bits.lsuCmd, 0.U)(
+    Seq(
+      LSU_STB.asUInt -> ("b0001".U << s1_vaddr(1, 0)),
+      LSU_STH.asUInt -> ("b0011".U << s1_vaddr(1, 0)),
+      LSU_STW.asUInt -> "b1111".U,
     ),
-    MuxLookup(stage1Uop.bits.lsuCmd, 0.U)(
+  )
+  val s1_isAle = (s1_vaddr &
+    MuxLookup(s1_uop.bits.lsuCmd, 0.U)(
       Seq(
+        LSU_STB.asUInt  -> 0.U,
+        LSU_STH.asUInt  -> 1.U,
+        LSU_STW.asUInt  -> 3.U,
         LSU_LDB.asUInt  -> 0.U,
         LSU_LDBU.asUInt -> 0.U,
         LSU_LDH.asUInt  -> 1.U,
         LSU_LDHU.asUInt -> 1.U,
         LSU_LDW.asUInt  -> 3.U,
       ),
+    )) =/= 0.U
+  val s1_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
+
+  io_dtlb_req.isWrite := s1_isWrite
+  io_dtlb_req.vaddr   := s1_vaddr
+
+  s1_exception.valid := s1_isAle || io_dtlb_resp.exception.valid
+  s1_exception.bits  := Mux(s1_isAle, ECODE.ALE.asUInt, io_dtlb_resp.exception.bits)
+
+  val s2_reg = Module(
+    new PipeStageReg(
+      new Bundle {
+        val uop       = new MicroOp
+        val isWrite   = Bool()
+        val vaddr     = UInt(vaddrWidth.W)
+        val writeData = UInt(dataWidth.W)
+        val paddr     = UInt(paddrWidth.W)
+        val wmask     = UInt(4.W)
+      },
+      true,
     ),
   )
+  s2_reg.io.flush.get             := io_kill
+  s2_reg.io.in.valid              := s1_uop.valid && s1_regs.valid
+  s1_uop.ready                    := s2_reg.io.in.fire
+  s1_regs.ready                   := s2_reg.io.in.fire
+  s2_reg.io.in.bits.uop           := s1_uop.bits
+  s2_reg.io.in.bits.isWrite       := s1_isWrite
+  s2_reg.io.in.bits.vaddr         := s1_vaddr
+  s2_reg.io.in.bits.writeData     := s1_writeData
+  s2_reg.io.in.bits.paddr         := s1_paddr
+  s2_reg.io.in.bits.wmask         := s1_wmask
+  s2_reg.io.in.bits.uop.exception := s1_exception.valid
+  s2_reg.io.in.bits.uop.ecode     := s1_exception.bits
 
-  val stage1Data = Wire(DecoupledIO(new Bundle {
-    val uop       = new MicroOp
-    val isWrite   = Bool()
-    val writeData = UInt(dataWidth.W)
-    val paddr     = UInt(paddrWidth.W)
-    val vaddr     = UInt(vaddrWidth.W)
-    val wmask     = UInt(4.W)
-  }))
-  stage1Data.valid              := stage1Uop.valid && stage1Regs.valid
-  stage1Uop.ready               := stage1Data.ready
-  stage1Regs.ready              := stage1Data.ready
-  stage1Data.bits.uop           := stage1Uop.bits
-  stage1Data.bits.uop.exception := stage1Uop.bits.exception | io_dtlb_resp.exception.valid
-  stage1Data.bits.uop.ecode     := Mux(stage1Uop.bits.exception, stage1Uop.bits.ecode, io_dtlb_resp.exception.bits)
-  stage1Data.bits.isWrite       := isWrite
-  stage1Data.bits.writeData     := stage1Regs.bits(1) << (stage1Data.bits.vaddr(1, 0) ## 0.U(3.W))
-  stage1Data.bits.paddr         := io_dtlb_resp.paddr
-  stage1Data.bits.vaddr         := io_dtlb_req.vaddr
-  stage1Data.bits.wmask := MuxLookup(stage1Uop.bits.lsuCmd, 0.U)(
-    Seq(
-      LSU_STB.asUInt -> ("b0001".U << stage1Data.bits.paddr(1, 0)),
-      LSU_STH.asUInt -> ("b0011".U << stage1Data.bits.paddr(1, 0)),
-      LSU_STW.asUInt -> "b1111".U,
-    ),
-  )
+  val s2_data = s2_reg.io.out
 
-  // TODO: Fix this state machine make it Irrevocable
-  val sSendReq :: sWaitAWfire :: sWaitWfire :: sWaitResp :: sWaitAWfireNextIgnore :: sWaitWfireNextIgnore :: sIgnoreResp :: sSendExcp :: Nil = Enum(8)
+  val sSendReq :: sWaitAWfire :: sWaitWfire :: sWaitResp :: sWaitAWfireNextIgnore :: sWaitWfireNextIgnore :: sIgnoreResp :: sSendXcep :: Nil = Enum(8)
 
   val state     = RegInit(sSendReq)
   val nextState = WireDefault(sSendReq)
   nextState := MuxLookup(state, sSendReq)(
     Seq(
       sSendReq -> Mux(
-        stage1Data.valid && !stage1Data.bits.uop.exception,
+        s2_data.valid && !s2_data.bits.uop.exception,
         MuxCase(
           sSendReq,
           Seq(
@@ -145,7 +149,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
             (io_axi.w.fire)                                       -> sWaitAWfire,
           ),
         ),
-        Mux(stage1Data.valid && stage1Data.bits.uop.exception, sSendExcp, sSendReq),
+        Mux(s2_data.valid, sSendXcep, sSendReq),
       ),
       sWaitAWfire -> Mux(
         io_kill,
@@ -169,15 +173,15 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
         sSendReq,
         sIgnoreResp,
       ),
-      sSendExcp -> sSendReq,
+      sSendXcep -> sSendReq,
     ),
   )
   state := nextState
 
-  stage1Data.ready := (nextState === sWaitResp) || (nextState === sSendExcp)
+  s2_data.ready := (nextState === sWaitResp) || (nextState === sSendXcep)
 
-  io_axi.ar.valid     := state === sSendReq && stage1Data.valid && !stage1Data.bits.isWrite && !stage1Data.bits.uop.exception
-  io_axi.ar.bits.addr := stage1Data.bits.paddr
+  io_axi.ar.valid     := state === sSendReq && s2_data.valid && !s2_data.bits.isWrite && !s2_data.bits.uop.exception
+  io_axi.ar.bits.addr := s2_data.bits.paddr
   io_axi.ar.bits.id   := 1.U
   io_axi.ar.bits.len  := 0.U
 
@@ -190,8 +194,8 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_axi.r.ready := (state === sWaitResp) || (state === sIgnoreResp)
 
   io_axi.aw.valid := state === sWaitAWfire || state === sWaitAWfireNextIgnore ||
-    (state === sSendReq && stage1Data.valid && stage1Data.bits.isWrite && !stage1Data.bits.uop.exception)
-  io_axi.aw.bits.addr := stage1Data.bits.paddr
+    (state === sSendReq && s2_data.valid && s2_data.bits.isWrite && !s2_data.bits.uop.exception)
+  io_axi.aw.bits.addr := s2_data.bits.paddr
   io_axi.aw.bits.id   := 1.U
   io_axi.aw.bits.len  := 0.U
 
@@ -202,15 +206,15 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_axi.aw.bits.prot  := 0.U
 
   io_axi.w.valid := state === sWaitWfire || state === sWaitWfireNextIgnore ||
-    (state === sSendReq && stage1Data.valid && stage1Data.bits.isWrite && !stage1Data.bits.uop.exception)
+    (state === sSendReq && s2_data.valid && s2_data.bits.isWrite && !s2_data.bits.uop.exception)
 
   io_axi.w.bits.id   := 1.U
   io_axi.w.bits.last := 1.U
-  io_axi.w.bits.data := stage1Data.bits.writeData
+  io_axi.w.bits.data := s2_data.bits.writeData
   io_axi.w.bits.strb := Mux(
     state === sWaitWfireNextIgnore || (state === sWaitWfire && io_kill),
     0.U,
-    stage1Data.bits.wmask,
+    s2_data.bits.wmask,
   )
 
   io_axi.b.ready := (state === sWaitResp) || (state === sIgnoreResp)
@@ -224,10 +228,10 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   }
   when(io_axi.b.fire) { assert(io_axi.b.bits.id === 1.U && io_axi.b.bits.resp === AXIParameters.RESP_OKAY) }
 
-  val stage2Data  = RegEnable(stage1Data.bits, stage1Data.fire)
   val io_mem_resp = IO(Output(Valid(new ExeUnitResp)))
+  val io_mem_xcep = IO(Output(Valid(new MicroOp)))
 
-  val loffset = WireDefault(stage2Data.paddr(1, 0) << 3.U)
+  val loffset = WireDefault(s2_data.bits.vaddr(1, 0) << 3.U)
   val lshift  = io_axi.r.bits.data >> loffset
   val rdata = MuxCase(
     lshift,
@@ -236,37 +240,36 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
       LSU_LDH  -> Fill(16, lshift(15)) ## lshift(15, 0),
       LSU_LDHU -> Fill(16, 0.U(1.W)) ## lshift(15, 0),
       LSU_LDBU -> Fill(24, 0.U(1.W)) ## lshift(7, 0),
-    ).map { case (key, data) => (stage2Data.uop.lsuCmd === key.asUInt, data) },
+    ).map { case (key, data) => (s2_data.bits.uop.lsuCmd === key.asUInt, data) },
   )
 
-  io_mem_resp.valid := !io_kill && ((state === sSendExcp) || ((state === sWaitResp) &&
-    ((io_axi.r.fire && io_axi.r.bits.id === 1.U) || (io_axi.b.fire && io_axi.b.bits.id === 1.U))))
-  io_mem_resp.bits.brInfo.valid         := false.B
-  io_mem_resp.bits.brInfo.bits          := DontCare
-  io_mem_resp.bits.uop                  := stage2Data.uop
-  io_mem_resp.bits.uop.badv             := stage2Data.vaddr
-  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(LSU_LDB, LSU_LDBU, LSU_LDH, LSU_LDHU, LSU_LDW).map(_.asUInt === stage2Data.uop.lsuCmd)).asUInt
-  io_mem_resp.bits.uop.debug.loadVaddr  := stage2Data.vaddr
-  io_mem_resp.bits.uop.debug.loadPaddr  := stage2Data.paddr
+  io_mem_resp.valid := !io_kill && ((state === sWaitResp) &&
+    ((io_axi.r.fire && io_axi.r.bits.id === 1.U) || (io_axi.b.fire && io_axi.b.bits.id === 1.U)))
+  io_mem_resp.bits.uop                  := s2_data.bits.uop
+  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(LSU_LDB, LSU_LDBU, LSU_LDH, LSU_LDHU, LSU_LDW).map(_.asUInt === s2_data.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop.debug.loadVaddr  := s2_data.bits.vaddr
+  io_mem_resp.bits.uop.debug.loadPaddr  := s2_data.bits.paddr
   io_mem_resp.bits.uop.debug.loadData   := rdata
-  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === stage2Data.uop.lsuCmd)).asUInt
-  io_mem_resp.bits.uop.debug.storeVaddr := stage2Data.vaddr
-  io_mem_resp.bits.uop.debug.storePaddr := stage2Data.paddr
-  io_mem_resp.bits.uop.debug.storeData := stage2Data.writeData & (VecInit(
+  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === s2_data.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop.debug.storeVaddr := s2_data.bits.vaddr
+  io_mem_resp.bits.uop.debug.storePaddr := s2_data.bits.paddr
+  io_mem_resp.bits.uop.debug.storeData := s2_data.bits.writeData & (VecInit(
     (0 until 4).map { i =>
-      val bit = stage2Data.wmask(i)
+      val bit = s2_data.bits.wmask(i)
       Fill(8, bit) << (i * 8)
     },
   ).reduce(_ | _))
-
   io_mem_resp.bits.data := rdata
 
-  dontTouch(state)
-  dontTouch(nextState)
-  dontTouch(stage1Uop)
-  dontTouch(stage1Regs)
-  dontTouch(stage1Data)
-  dontTouch(stage2Data)
+  io_mem_xcep.valid     := !io_kill && (state === sSendXcep)
+  io_mem_xcep.bits      := s2_data.bits.uop
+  io_mem_xcep.bits.badv := s2_data.bits.vaddr
+
+  if (params.debug) {
+    dontTouch(state)
+    dontTouch(nextState)
+    dontTouch(s2_data)
+  }
 }
 
 /*
@@ -426,55 +429,59 @@ class UniqueExeUnit(
 
   iss_uop_ext.ready(2) := true.B
 
-  stage1Regs.ready := false.B
-  stage1Uop.ready  := false.B
+  s1_regs.ready := false.B
+  s1_uop.ready  := false.B
 
-  val io_unq_resp = IO(Output(Valid(new ExeUnitResp)))
-
-  io_unq_resp.valid             := false.B
-  io_unq_resp.bits              := DontCare
-  io_unq_resp.bits.brInfo.valid := false.B
-
-  if (hasMul) {
-    val mulUnit = Module(new MultiplyUnit)
+  val io_mul_resp = if (hasMul) {
+    val io_mul_resp = IO(Output(Decoupled(new ExeUnitResp)))
+    val mulUnit     = Module(new MultiplyUnit)
     mulUnit.io.kill := io_kill
 
-    mulUnit.io.req.bits.rs1_data := stage1Regs.bits(0)
-    mulUnit.io.req.bits.rs2_data := stage1Regs.bits(1)
-    mulUnit.io.req.bits.uop      := stage1Uop.bits
+    mulUnit.io.req.bits.rs1_data := s1_regs.bits(0)
+    mulUnit.io.req.bits.rs2_data := s1_regs.bits(1)
+    mulUnit.io.req.bits.uop      := s1_uop.bits
     mulUnit.io.req.bits.ftq_info := DontCare
     mulUnit.io.req.valid         := false.B
-    when(stage1Uop.valid && stage1Regs.valid && EXUType.isMul(stage1Uop.bits.exuCmd)) {
+    when(s1_uop.valid && s1_regs.valid && EXUType.isMul(s1_uop.bits.exuCmd)) {
       mulUnit.io.req.valid := true.B
-      stage1Uop.ready      := mulUnit.io.resp.valid
-      stage1Regs.ready     := mulUnit.io.resp.valid
-      io_unq_resp.valid    := mulUnit.io.resp.valid
-      io_unq_resp.bits     := mulUnit.io.resp.bits
+      s1_uop.ready         := mulUnit.io.req.ready
+      s1_regs.ready        := mulUnit.io.req.ready
     }
-    mulUnit.io.resp.ready := true.B
+    io_mul_resp.valid     := mulUnit.io.resp.valid
+    mulUnit.io.resp.ready := io_mul_resp.ready
+    io_mul_resp.bits      := mulUnit.io.resp.bits
+
+    Some(io_mul_resp)
+  } else {
+    None
   }
 
-  if (hasDiv) {
-    val divUnit = Module(new DivUnit)
+  val io_div_resp = if (hasDiv) {
+    val io_div_resp = IO(Output(DecoupledIO(new ExeUnitResp)))
+    val divUnit     = Module(new DivUnit)
     divUnit.io.kill := io_kill
 
-    divUnit.io.req.bits.rs1_data := stage1Regs.bits(0)
-    divUnit.io.req.bits.rs2_data := stage1Regs.bits(1)
-    divUnit.io.req.bits.uop      := stage1Uop.bits
+    divUnit.io.req.bits.rs1_data := s1_regs.bits(0)
+    divUnit.io.req.bits.rs2_data := s1_regs.bits(1)
+    divUnit.io.req.bits.uop      := s1_uop.bits
     divUnit.io.req.bits.ftq_info := DontCare
     divUnit.io.req.valid         := false.B
-    when(stage1Uop.valid && stage1Regs.valid && EXUType.isDiv(stage1Uop.bits.exuCmd)) {
+    when(s1_uop.valid && s1_regs.valid && EXUType.isDiv(s1_uop.bits.exuCmd)) {
       divUnit.io.req.valid := true.B
-      stage1Uop.ready      := divUnit.io.resp.valid
-      stage1Regs.ready     := divUnit.io.resp.valid
-      io_unq_resp.valid    := divUnit.io.resp.valid
-      io_unq_resp.bits     := divUnit.io.resp.bits
+      s1_regs.ready        := divUnit.io.req.ready
+      s1_uop.ready         := divUnit.io.req.ready
     }
-    divUnit.io.resp.ready := true.B
+    io_div_resp.valid     := divUnit.io.resp.valid
+    divUnit.io.resp.ready := io_div_resp.ready
+    io_div_resp.bits      := divUnit.io.resp.bits
+
+    Some(io_div_resp)
+  } else {
+    None
   }
 
-  val io_csr_access =
-    if (hasCSR) Some(IO(new Bundle {
+  val (io_csr_access, io_csr_resp, io_csr_xcep) = if (hasCSR) {
+    val io_csr_access = IO(new Bundle {
       val raddr = Output(UInt(14.W))       // CSR address to read
       val rdata = Input(UInt(dataWidth.W)) // CSR read data
 
@@ -486,39 +493,43 @@ class UniqueExeUnit(
       val counterID = Input(UInt(dataWidth.W))
       val cntvh     = Input(UInt(dataWidth.W))
       val cntvl     = Input(UInt(dataWidth.W))
-    }))
-    else None
+    })
+    val io_csr_resp = IO(Output(Valid(new ExeUnitResp)))
+    val io_csr_xcep = IO(Output(Valid(new MicroOp)))
 
-  if (hasCSR) {
-
-    io_csr_access.get.raddr := stage1Uop.bits.imm
-    io_csr_access.get.waddr := stage1Uop.bits.imm
-    io_csr_access.get.wmask := Mux(
-      stage1Uop.bits.csrCmd === CSRType.XCHG.asUInt,
-      stage1Regs.bits(0),
+    io_csr_access.raddr := s1_uop.bits.imm
+    io_csr_access.waddr := s1_uop.bits.imm
+    io_csr_access.wmask := Mux(
+      s1_uop.bits.csrCmd === CSRType.XCHG.asUInt,
+      s1_regs.bits(0),
       Fill(dataWidth, 1.B),
     )
-    io_csr_access.get.wdata := stage1Regs.bits(1)
-    io_csr_access.get.we    := false.B
+    io_csr_access.wdata := s1_regs.bits(1)
+    io_csr_access.we    := false.B
 
-    when(stage1Uop.valid && stage1Regs.valid && isCSR(stage1Uop.bits.exuCmd)) {
-      stage1Regs.ready     := true.B
-      stage1Uop.ready      := true.B
-      io_csr_access.get.we := CSRType.isWrite(stage1Uop.bits.csrCmd)
-      io_unq_resp.valid    := true.B
-      io_unq_resp.bits.uop := stage1Uop.bits
-      io_unq_resp.bits.data := MuxLookup(stage1Uop.bits.csrCmd, io_csr_access.get.rdata)(
+    io_csr_resp.valid := false.B
+    io_csr_resp.bits  := DontCare
+    io_csr_xcep.valid := false.B
+    io_csr_xcep       := DontCare
+    when(s1_uop.valid && s1_regs.valid && EXUType.isCSR(s1_uop.bits.exuCmd)) {
+      s1_regs.ready        := true.B
+      s1_uop.ready         := true.B
+      io_csr_access.we     := CSRType.isWrite(s1_uop.bits.csrCmd)
+      io_csr_resp.valid    := true.B
+      io_csr_resp.bits.uop := s1_uop.bits
+      io_csr_resp.bits.data := MuxLookup(s1_uop.bits.csrCmd, io_csr_access.rdata)(
         Seq(
-          CSRType.RDCNTID.asUInt -> io_csr_access.get.counterID,
-          CSRType.RDCNTVL.asUInt -> io_csr_access.get.cntvl,
-          CSRType.RDCNTVH.asUInt -> io_csr_access.get.cntvh,
+          CSRType.RDCNTID.asUInt -> io_csr_access.counterID,
+          CSRType.RDCNTVL.asUInt -> io_csr_access.cntvl,
+          CSRType.RDCNTVH.asUInt -> io_csr_access.cntvh,
         ),
       )
     }
-  }
 
-  dontTouch(stage1Uop)
-  dontTouch(stage1Regs)
+    (Some(io_csr_access), Some(io_csr_resp), Some(io_csr_xcep))
+  } else {
+    (None, None, None)
+  }
 }
 
 class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
@@ -529,49 +540,40 @@ class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val io_ftq_resp = IO(Input(Vec(2, new FTQInfo)))
 
   io_ftq_req(0).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy &&
-    (iss_uop_ext.bits.op1Sel === OP1Type.OP1_PC.asUInt || iss_uop_ext.bits.cfiType =/= CFIType.CFI_NONE.asUInt)
-  io_ftq_req(0).bits := iss_uop_ext.bits.ftqIdx
-  io_ftq_req(1).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy &&
-    iss_uop_ext.bits.cfiType === CFIType.CFI_JIRL.asUInt
-  io_ftq_req(1).bits := WrapInc(iss_uop_ext.bits.ftqIdx, params.frontendParams.ftqNum)
-  val stage0Ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  stage0Ftq.valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy
+    (iss_uop_ext.bits.op1Sel === OP1Type.OP1_PC.asUInt ||
+      iss_uop_ext.bits.isB || iss_uop_ext.bits.isBr || iss_uop_ext.bits.isJirl)
+  io_ftq_req(0).bits  := iss_uop_ext.bits.ftqIdx
+  io_ftq_req(1).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy && iss_uop_ext.bits.isJirl
+  io_ftq_req(1).bits  := WrapInc(iss_uop_ext.bits.ftqIdx, params.frontendParams.ftqNum)
+  val s0_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
+  s0_ftq.valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy
   (!io_ftq_req(0).valid || io_ftq_req(0).ready) && (!io_ftq_req(1).valid || io_ftq_req(1).ready)
-  stage0Ftq.bits       := io_ftq_resp
-  iss_uop_ext.ready(2) := stage0Ftq.ready
+  s0_ftq.bits          := io_ftq_resp
+  iss_uop_ext.ready(2) := s0_ftq.ready
 
-  val stage0to1Ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  PipeConnect(Some(io_kill), stage0Ftq, stage0to1Ftq)
-
-  val stage1Ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  stage1Ftq.valid    := stage0to1Ftq.valid
-  stage1Ftq.bits     := stage0to1Ftq.bits
-  stage0to1Ftq.ready := stage1Ftq.ready
-
-  val exe_req = Wire(new FuncUnitReq)
-  exe_req.uop      := stage1Uop.bits
-  exe_req.rs1_data := stage1Regs.bits(0)
-  exe_req.rs2_data := stage1Regs.bits(1)
-  exe_req.ftq_info := stage1Ftq.bits
+  val s1_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
+  PipeConnect(Some(io_kill), s0_ftq, s1_ftq)
 
   val alu = Module(new ALUUnit)
-  alu.io.req.valid := stage1Uop.valid && stage1Regs.valid && stage1Ftq.valid
-  stage1Uop.ready  := alu.io.req.fire
-  stage1Regs.ready := alu.io.req.fire
-  stage1Ftq.ready  := alu.io.req.fire
-  alu.io.req.bits  := exe_req
-  alu.io.kill      := io_kill
+  alu.io.req.valid         := s1_uop.valid && s1_regs.valid && s1_ftq.valid
+  s1_uop.ready             := alu.io.req.fire
+  s1_regs.ready            := alu.io.req.fire
+  s1_ftq.ready             := alu.io.req.fire
+  alu.io.req.bits.uop      := s1_uop.bits
+  alu.io.req.bits.rs1_data := s1_regs.bits(0)
+  alu.io.req.bits.rs2_data := s1_regs.bits(1)
+  alu.io.req.bits.ftq_info := s1_ftq.bits
+  alu.io.kill              := io_kill
 
   val io_alu_resp = IO(Output(Valid(new ExeUnitResp)))
   io_alu_resp.valid := alu.io.resp.valid
   alu.io.resp.ready := true.B
   io_alu_resp.bits  := alu.io.resp.bits
 
-  dontTouch(stage0Uop)
-  dontTouch(stage0Ftq)
-  dontTouch(stage0Regs)
-  dontTouch(stage1Uop)
-  dontTouch(stage1Ftq)
-  dontTouch(stage1Regs)
-  dontTouch(io_read_reqs)
+  val io_alu_brInfo = IO(Output(new BrRecoveryInfo))
+  io_alu_brInfo := alu.io.brinfo
+
+  if (params.debug) {
+    dontTouch(s1_ftq)
+  }
 }

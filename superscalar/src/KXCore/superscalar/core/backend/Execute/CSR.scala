@@ -225,7 +225,7 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
   /* ------ Global State ------ */
 
   /* ------ Exception Enter ------ */
-  val pc        = Input(UInt(vaddrWidth.W)) // Program counter for exception handling
+  val epc       = Input(UInt(vaddrWidth.W)) // Program counter for exception handling
   val ecode     = Input(UInt(6.W))          // Exception code
   val ecode_sub = Input(UInt(9.W))
   val badv      = Input(UInt(vaddrWidth.W)) // Bad virtual address for exception
@@ -336,7 +336,7 @@ class CSR(implicit params: CoreParameters) extends Module {
     prmd  := excp_prmd
     estat := excp_estat
     badv  := Mux(Seq(TLBR, ADEF, ALE, PIL, PIS, PIF, PME, PPI).map(e => ECODE.getEcode(e.asUInt) === io.ecode).reduce(_ || _), io.badv, badv)
-    era   := io.pc
+    era   := io.epc
   }.elsewhen(io.eret_en) {
     crmd := eret_crmd
     // prmd := eret_prmd

@@ -13,9 +13,11 @@ import KXCore.superscalar.EXUType._
 abstract class FunctionalUnit(val isAluUnit: Boolean = false)(implicit params: CoreParameters) extends Module {
   val io = IO(new Bundle {
     val kill = Input(Bool())
-
     val req  = Flipped(new DecoupledIO(new FuncUnitReq))
     val resp = new DecoupledIO(new ExeUnitResp)
+
+    // only used by branch unit
+    val brinfo = if (isAluUnit) Output(new BrRecoveryInfo) else null
   })
 }
 
@@ -31,7 +33,6 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
   // Get the uop PC for jumps
   val block_pc = params.fetchAlign(io.req.bits.ftq_info(0).entry.fetchPC)
   val uop_pc   = (block_pc | Cat(uop.idx, Fill(log2Ceil(instBytes), 0.U)))
-
   val op1_data = MuxLookup(uop.op1Sel, 0.U)(
     Seq(
       OP1Type.OP1_RS1.asUInt  -> io.req.bits.rs1_data,
@@ -49,7 +50,7 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
     ),
   )
 
-  val alu = Module(new ALU())
+  val alu = Module(new ALU)
 
   alu.io.in1 := op1_data.asUInt
   alu.io.in2 := op2_data.asUInt
@@ -58,32 +59,38 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
   val rs1 = io.req.bits.rs1_data
   val rs2 = io.req.bits.rs2_data
 
-  val brInfo = Wire(new BrUpdateInfo)
-  brInfo.mispredict := MuxLookup(io.req.bits.uop.cfiType, false.B)(
+  val brInfo = Wire(new BrRecoveryInfo)
+  brInfo.valid := io.req.valid && MuxCase(
+    false.B,
     Seq(
-      CFIType.CFI_JIRL.asUInt -> (!io.req.bits.ftq_info(1).valid ||
+      io.req.bits.uop.isJirl -> (!io.req.bits.ftq_info(1).valid ||
+        !io.req.bits.ftq_info(0).entry.cfiIdx.valid ||
         brInfo.target =/= io.req.bits.ftq_info(1).entry.fetchPC),
-      CFIType.CFI_BR.asUInt -> (alu.io.cmp_out(0) =/= io.req.bits.ftq_info(0).entry.taken ||
-        io.req.bits.ftq_info(0).entry.cfiIdx =/= io.req.bits.uop.idx),
+      io.req.bits.uop.isBr -> Mux(
+        alu.io.cmp_out,
+        !io.req.bits.ftq_info(0).entry.cfiIdx.valid ||
+          io.req.bits.ftq_info(0).entry.cfiIdx.bits =/= io.req.bits.uop.idx,
+        io.req.bits.ftq_info(0).entry.cfiIdx.valid &&
+          io.req.bits.ftq_info(0).entry.cfiIdx.bits === io.req.bits.uop.idx,
+      ),
     ),
   )
-  brInfo.cfiIdx.valid := brInfo.cfiIsB || brInfo.cfiIsJirl || (brInfo.cfiIsBr && alu.io.cmp_out(0))
-  brInfo.cfiIdx.bits  := io.req.bits.uop.idx
-  brInfo.cfiIsB       := io.req.bits.uop.cfiType === CFIType.CFI_B.asUInt
-  brInfo.cfiIsJirl    := io.req.bits.uop.cfiType === CFIType.CFI_JIRL.asUInt
-  brInfo.cfiIsBr      := io.req.bits.uop.cfiType === CFIType.CFI_BR.asUInt
   brInfo.target := Mux(
-    io.req.bits.uop.cfiType === CFIType.CFI_JIRL.asUInt,
+    io.req.bits.uop.isJirl,
     io.req.bits.rs1_data,
     uop_pc,
   ) + Mux(brInfo.cfiIdx.valid, io.req.bits.uop.imm, 4.U)
+  brInfo.cfiIdx.valid := brInfo.cfiIsB || brInfo.cfiIsJirl || (brInfo.cfiIsBr && alu.io.cmp_out)
+  brInfo.cfiIdx.bits  := io.req.bits.uop.idx
+  brInfo.cfiIsB       := io.req.bits.uop.isB
+  brInfo.cfiIsBr      := io.req.bits.uop.isBr
+  brInfo.cfiIsJirl    := io.req.bits.uop.isJirl
 
   io.resp.valid                := io.req.valid
   io.resp.bits.uop             := io.req.bits.uop
   io.resp.bits.uop.debug.wdata := alu.io.out
   io.resp.bits.data            := alu.io.out
-  io.resp.bits.brInfo.valid    := io.req.bits.uop.cfiType =/= CFIType.CFI_NONE.asUInt
-  io.resp.bits.brInfo.bits     := brInfo
+  io.brinfo                    := brInfo
   assert(io.resp.ready)
 }
 
@@ -111,8 +118,6 @@ class MultiplyUnit(implicit params: CoreParameters) extends FunctionalUnit {
     multiplier.io.out.bits.result_hi,
     multiplier.io.out.bits.result_lo,
   )
-  io.resp.bits.brInfo.valid := false.B
-  io.resp.bits.brInfo.bits  := DontCare
 }
 
 class DivUnit(implicit params: CoreParameters) extends FunctionalUnit {
@@ -136,6 +141,4 @@ class DivUnit(implicit params: CoreParameters) extends FunctionalUnit {
     divider.io.out.bits.remainder,
     divider.io.out.bits.quotient,
   )
-  io.resp.bits.brInfo.valid := false.B
-  io.resp.bits.brInfo.bits  := DontCare
 }

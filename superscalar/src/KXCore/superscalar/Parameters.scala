@@ -27,14 +27,15 @@ case class BTBParams(
     extendedNSets: Int = 128,
 ) {
   require(isPow2(nSets))
-  require(isPow2(extendedNSets) || extendedNSets == 0)
+  require(isPow2(nWays))
+  require(isPow2(extendedNSets))
   require(extendedNSets <= nSets)
   require(extendedNSets >= 1)
 }
 
 case class FrontendParmaeters(
     fetchWidth: Int = 4, // Number of instructions fetched per request
-    fbNum: Int = 16,     // Number of entries in the fetch buffer
+    fbNum: Int = 32,     // Number of entries in the fetch buffer
     ftqNum: Int = 32,    // Number of entries in the fetch target queue
     rasNum: Int = 32,    // Number of entries in the return address stack
     icacheParams: CacheParameters = CacheParameters(),
@@ -85,7 +86,7 @@ case class BackendParameters(
   def memIQParams = issueParams(0)
   def unqIQParams = issueParams(1)
   def intIQParams = issueParams(2)
-  val wbPortNum   = issueParams.map(_.issueWidth).sum
+  val wbPortNum   = issueParams.map(_.issueWidth).sum + 2
 }
 
 case class CoreParameters(

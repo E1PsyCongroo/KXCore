@@ -244,9 +244,20 @@ object CommitFlushControlField extends DecodeField[Instruction, Bool] {
   def chiselType: Bool = Bool()
   def genTable(op: Instruction): BitPat = {
     op match {
-      case ST_B | ST_H | ST_W                                    => BitPat.Y(1)
-      case CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat.Y(1)
-      case _                                                     => BitPat.N(1)
+      case ERTN => BitPat.Y(1)
+      case _    => BitPat.N(1)
+    }
+  }
+
+}
+
+object BusyControlField extends DecodeField[Instruction, Bool] {
+  def name             = "Busy control field"
+  def chiselType: Bool = Bool()
+  def genTable(op: Instruction): BitPat = {
+    op match {
+      case ERTN => BitPat.N(1)
+      case _    => BitPat.Y(1)
     }
   }
 }
@@ -286,9 +297,8 @@ object CSROPControlField extends DecodeField[Instruction, UInt] {
 }
 
 class DecoderIO(implicit params: CoreParameters) extends Bundle {
-  val intr_pending = Input(Bool())
-  val req          = Input(Vec(params.backendParams.coreWidth, new MicroOp))
-  val resp         = Output(Vec(params.backendParams.coreWidth, new MicroOp))
+  val req  = Input(Vec(params.backendParams.coreWidth, new MicroOp))
+  val resp = Output(Vec(params.backendParams.coreWidth, new MicroOp))
 }
 
 class Decoder(implicit params: CoreParameters) extends Module {
@@ -389,6 +399,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
       WBControlField,
       UniqControlField,
       CommitFlushControlField,
+      BusyControlField,
       LSUOPControlField,
       CSROPControlField,
     ),
@@ -402,9 +413,8 @@ class Decoder(implicit params: CoreParameters) extends Module {
     val inst         = Mux(unImpls.map(_.bitPat === io.req(i).inst).reduce(_ || _), NOP, io.req(i).inst)
     val decodeResult = decodeTable.decode(inst)
     val uop          = WireDefault(io.req(i))
-    uop.iqType  := decodeResult(IQTypeControlField)
-    uop.fuType  := decodeResult(FUTypeControlField)
-    uop.cfiType := decodeResult(CFITypeControlField)
+    uop.iqType := decodeResult(IQTypeControlField)
+    uop.fuType := decodeResult(FUTypeControlField)
     uop.imm := MuxCase(
       DontCare,
       Seq(
@@ -444,26 +454,24 @@ class Decoder(implicit params: CoreParameters) extends Module {
         WBDest.destRj   -> inst(9, 5),
       ).map { case (key, value) => (decodeResult(WBControlField) === key.asUInt, value) },
     )
-    uop.isUnique := decodeResult(UniqControlField)
-    uop.flush    := decodeResult(CommitFlushControlField)
-    uop.exuCmd   := decodeResult(EXUOPControlField)
-    uop.csrCmd   := decodeResult(CSROPControlField)
-    uop.lsuCmd   := decodeResult(LSUOPControlField)
-    uop.exception := io.req(i).exception || io.intr_pending || ine ||
-      io.req(i).inst === SYSCALL.inst || io.req(i).inst === BREAK.inst
+    uop.isUnique      := decodeResult(UniqControlField)
+    uop.flushOnCommit := decodeResult(CommitFlushControlField)
+    uop.exuCmd        := decodeResult(EXUOPControlField)
+    uop.csrCmd        := decodeResult(CSROPControlField)
+    uop.lsuCmd        := decodeResult(LSUOPControlField)
+    uop.exception     := io.req(i).exception || ine || io.req(i).inst === SYSCALL.inst || io.req(i).inst === BREAK.inst
     uop.ecode := MuxCase(
       DontCare,
       Seq(
         io.req(i).exception               -> io.req(i).ecode,
         ine                               -> ECODE.INE.asUInt,
-        io.intr_pending                   -> ECODE.INT.asUInt,
         (io.req(i).inst === SYSCALL.inst) -> ECODE.SYS.asUInt,
         (io.req(i).inst === BREAK.inst)   -> ECODE.BRK.asUInt,
       ),
     )
-    uop.badv := io.req(i).badv
-    uop.ertn := io.req(i).inst === ERTN.inst
-    uop.busy := !uop.exception && !uop.ertn
+    uop.badv   := io.req(i).badv
+    uop.isErtn := inst === ERTN.inst
+    uop.busy   := decodeResult(BusyControlField)
 
     io.resp(i) := uop
   }

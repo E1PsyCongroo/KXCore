@@ -45,9 +45,9 @@ class IssueSlot(implicit params: CoreParameters) extends Module {
   valid := MuxCase(
     valid,
     Seq(
-      io.kill                                  -> false.B,
-      (io.in_uop.valid && io.in_uop.bits.busy) -> true.B,
-      (io.grant || io.clear)                   -> false.B,
+      io.kill                                                               -> false.B,
+      (io.in_uop.valid && io.in_uop.bits.busy && !io.in_uop.bits.exception) -> true.B,
+      (io.grant || io.clear)                                                -> false.B,
     ),
   )
 
@@ -71,7 +71,7 @@ class IssueSlot(implicit params: CoreParameters) extends Module {
   }
 
   io.request := valid && p1 && p2 && !io.kill
-  val high_priority = slot_uop.cfiType =/= CFIType.CFI_NONE.asUInt
+  val high_priority = slot_uop.isB || slot_uop.isBr || slot_uop.isJirl
   io.request_hp := io.request && high_priority
 
   io.valid := valid

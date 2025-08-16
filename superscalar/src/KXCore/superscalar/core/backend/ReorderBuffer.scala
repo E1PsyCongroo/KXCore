@@ -6,6 +6,7 @@ import KXCore.common._
 import KXCore.common.utils._
 import KXCore.common.Privilege._
 import KXCore.superscalar._
+import KXCore.superscalar.REDIRECTType._
 import KXCore.superscalar.core._
 import KXCore.superscalar.core.frontend._
 
@@ -18,32 +19,44 @@ class RoBAllocIO(implicit params: CoreParameters) extends Bundle {
 
 class RoBWriteIO(implicit params: CoreParameters) extends Bundle {
   val uop    = new MicroOp
-  val brInfo = Valid(new BrUpdateInfo)
+  val brInfo = new BrRecoveryInfo
 }
 class RoBCommitIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, frontendParams, backendParams}
-  import commonParams.{vaddrWidth, instBytes}
+  import commonParams.{vaddrWidth}
   import frontendParams.{ftqIdxWidth}
-  import backendParams.{coreWidth, robRowNum, robIdxWidth, retireWidth, lregWidth, pregWidth, wbPortNum}
+  import backendParams.{coreWidth}
 
-  val valids   = Vec(coreWidth, Bool())
-  val uop      = Vec(coreWidth, new MicroOp)
-  val ftqIdx   = UInt(ftqIdxWidth.W)
-  val brInfo   = Valid(new BrUpdateInfo)
-  val redirect = Valid(UInt(vaddrWidth.W))
-  val exception = Valid(new Bundle {
-    val pc        = Output(UInt(vaddrWidth.W)) // Program counter for exception handling
-    val ecode     = Output(UInt(6.W))          // Exception code
-    val ecode_sub = Output(UInt(9.W))
-    val badv      = Output(UInt(vaddrWidth.W)) // Bad virtual address for exception
-  })
-  val ertn = Output(Bool())
+  val valids = Vec(coreWidth, Bool())
+  val uop    = Vec(coreWidth, new MicroOp)
+}
+
+class RoBRedirectIO(implicit params: CoreParameters) extends Bundle {
+  import params.{commonParams, frontendParams}
+  import commonParams.{vaddrWidth}
+  import frontendParams.{ftqIdxWidth}
+
+  val valid      = Bool()
+  val target     = UInt(vaddrWidth.W)
+  val ftqIdx     = UInt(ftqIdxWidth.W)
+  val brRecovery = new BrRecoveryInfo
+}
+
+class RoBExceptionIO(implicit params: CoreParameters) extends Bundle {
+  import params.{commonParams}
+  import commonParams.{vaddrWidth}
+
+  val valid     = Bool()
+  val epc       = UInt(vaddrWidth.W) // pc for exception handling
+  val ecode     = UInt(6.W)          // exception code
+  val ecode_sub = UInt(9.W)
+  val badv      = UInt(vaddrWidth.W) // bad virtual address for exception about addr
 }
 
 class ReorderBuffer(implicit params: CoreParameters) extends Module {
   import params.{commonParams, frontendParams, backendParams}
   import commonParams.{dataWidth, vaddrWidth, instBytes}
-  import frontendParams.{ftqIdxWidth}
+  import frontendParams.{fetchWidth, ftqIdxWidth}
   import backendParams.{coreWidth, robRowNum, robIdxWidth, retireWidth, lregWidth, pregWidth, wbPortNum}
 
   val io = IO(new Bundle {
@@ -51,37 +64,51 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     val empty = Output(Bool())
 
     val write = Vec(wbPortNum, Flipped(Valid(new RoBWriteIO)))
+    val brInfo = Vec(
+      backendParams.intIQParams.issueWidth,
+      Input(new BrRecoveryInfo {
+        val uop = new MicroOp
+      }),
+    )
+    val xcepInfo = Vec(2, Flipped(Valid(new MicroOp)))
 
-    val getPC  = Flipped(new GetPCFromFtqIO)
-    val commit = Output(new RoBCommitIO)
-    val eentry = Input(UInt(dataWidth.W)) // Exception entry address
-    val era    = Input(UInt(dataWidth.W))
+    val ftqReq  = Output(UInt(ftqIdxWidth.W))
+    val ftqResp = Input(new FTQInfo)
+
+    val commit    = Output(new RoBCommitIO)
+    val redirect  = Output(new RoBRedirectIO)
+    val exception = Output(new RoBExceptionIO)
+
+    val intr_pending = Input(Bool())
+    val eentry       = Input(UInt(dataWidth.W))
+    val era          = Input(UInt(dataWidth.W))
+    val ertn         = Output(Bool())
   })
 
-  val rob_flush = Wire(Bool())
+  val rob_flush       = Wire(Bool())
+  val rob_do_unique   = RegInit(false.B)
+  val rob_xcep_val    = RegInit(false.B)
+  val rob_xcep_info   = Reg(new MicroOp)
+  val rob_mispred_val = RegInit(false.B)
+  val rob_mispred_info = Reg(new Bundle {
+    val uop       = new MicroOp
+    val target    = UInt(commonParams.vaddrWidth.W)
+    val cfiIdx    = Valid(UInt(log2Ceil(frontendParams.fetchWidth).W))
+    val cfiIsB    = Bool()
+    val cfiIsJirl = Bool()
+    val cfiIsBr   = Bool()
+  })
 
-  val rob_exception_info = Reg(Valid(new Bundle {
-    val robIdx = UInt(robIdxWidth.W)
-    val ecode  = UInt(ECODE.getWidth.W)
-    val badv   = UInt(vaddrWidth.W) // Bad virtual address for exception
-  }))
-  when(reset.asBool) { rob_exception_info.valid := false.B }
-
-  val rob_head = RegInit(0.U(log2Ceil(robRowNum).W))
-  val rob_tail = RegInit(0.U(log2Ceil(robRowNum).W))
-
-  val next_rob_head = WireInit(rob_head)
-  rob_head := next_rob_head
+  val rob_head      = RegInit(0.U(log2Ceil(robRowNum).W))
+  val rob_tail      = RegInit(0.U(log2Ceil(robRowNum).W))
+  val rob_tail_free = RegInit(Fill(coreWidth, 1.B))
 
   val full  = Wire(Bool())
   val empty = Wire(Bool())
 
-  val will_commit          = Wire(Vec(coreWidth, Bool()))
-  val will_flush           = Wire(Vec(coreWidth, Bool()))
-  val will_throw_exception = Wire(Vec(coreWidth, Bool()))
-  val can_commit           = Wire(Vec(coreWidth, Bool()))
-  val can_flush            = Wire(Vec(coreWidth, Bool()))
-  val can_throw_exception  = Wire(Vec(coreWidth, Bool()))
+  val can_commit   = Wire(Vec(coreWidth, Bool()))
+  val can_redirect = Wire(Vec(coreWidth, Bool()))
+  val will_commit  = Wire(Vec(coreWidth, Bool()))
 
   val rob_head_vals = Wire(Vec(coreWidth, Bool())) // are the instructions at the head valid?
 
@@ -95,122 +122,82 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   }
 
   class RoBCompactUop extends Bundle {
-    val idx       = UInt(log2Ceil(frontendParams.fetchWidth).W)
+    val idx       = UInt(log2Ceil(fetchWidth).W)
+    val ftqIdx    = UInt(ftqIdxWidth.W)
     val ldst      = UInt(lregWidth.W)
     val pdst      = UInt(pregWidth.W)
     val stalePdst = UInt(pregWidth.W)
-    val flush     = Bool()
-    val ertn      = Bool()
   }
   def compact_to_uop(compact: RoBCompactUop, uop: MicroOp): MicroOp = {
     val out = WireInit(uop)
     out.idx       := compact.idx
+    out.ftqIdx    := compact.ftqIdx
     out.ldst      := compact.ldst
     out.pdst      := compact.pdst
     out.stalePdst := compact.stalePdst
-    out.flush     := compact.flush
-    out.ertn      := compact.ertn
     out
   }
   def uop_to_compact(uop: MicroOp): RoBCompactUop = {
     val out = Wire(new RoBCompactUop)
     out.idx       := uop.idx
+    out.ftqIdx    := uop.ftqIdx
     out.ldst      := uop.ldst
     out.pdst      := uop.pdst
     out.stalePdst := uop.stalePdst
-    out.flush     := uop.flush
-    out.ertn      := uop.ertn
     out
   }
 
-  val rob_row_ftq    = Reg(Vec(robRowNum, UInt(ftqIdxWidth.W)))
-  val rob_row_brInfo = Reg(Vec(if (coreWidth == retireWidth) 1 else coreWidth, Vec(robRowNum, Valid(new BrUpdateInfo))))
-  rob_row_brInfo.foreach(_.foreach(b => when(reset.asBool) { b.valid := false.B }))
   for (w <- 0 until coreWidth) {
     def MatchBank(bank_idx: UInt): Bool = (bank_idx === w.U)
 
     // one bank
-    val rob_row_brInfo_idx = if (coreWidth == retireWidth) 0 else w
-    val rob_val            = RegInit(VecInit(Seq.fill(robRowNum) { false.B }))
-    val rob_uop            = Reg(Vec(robRowNum, new MicroOp()))
-    val rob_compact_uop    = Reg(Vec(robRowNum, new RoBCompactUop))
-    val rob_bsy            = Reg(Vec(robRowNum, Bool()))
-    val rob_exception      = Reg(Vec(robRowNum, Bool()))
+    val rob_val         = RegInit(VecInit(Seq.fill(robRowNum) { false.B }))
+    val rob_uop         = Reg(Vec(robRowNum, new MicroOp()))
+    val rob_compact_uop = Reg(Vec(robRowNum, new RoBCompactUop))
+    val rob_bsy         = Reg(Vec(robRowNum, Bool()))
+    val rob_redirect    = Reg(Vec(robRowNum, Bool()))
 
     // -----------------------------------------------
     // Dispatch: Add Entry to ROB
 
     when(io.alloc(w).valid && io.alloc(w).ready) {
-      rob_val(rob_tail)                                  := true.B
-      rob_bsy(rob_tail)                                  := io.alloc(w).uop.busy
-      rob_compact_uop(rob_tail)                          := uop_to_compact(io.alloc(w).uop)
-      rob_uop(rob_tail)                                  := io.alloc(w).uop
-      rob_exception(rob_tail)                            := io.alloc(w).uop.exception
-      rob_row_ftq(rob_tail)                              := io.alloc(w).uop.ftqIdx
-      rob_row_brInfo(rob_row_brInfo_idx)(rob_tail).valid := false.B
-      when(!rob_exception_info.valid && io.alloc(w).uop.exception) {
-        rob_exception_info.valid       := io.alloc(w).uop.exception
-        rob_exception_info.bits.badv   := io.alloc(w).uop.badv
-        rob_exception_info.bits.ecode  := io.alloc(w).uop.ecode
-        rob_exception_info.bits.robIdx := io.alloc(w).uop.robIdx
-      }
+      rob_val(rob_tail)         := true.B
+      rob_bsy(rob_tail)         := io.alloc(w).uop.busy
+      rob_compact_uop(rob_tail) := uop_to_compact(io.alloc(w).uop)
+      rob_uop(rob_tail)         := io.alloc(w).uop
+      rob_redirect(rob_tail)    := io.alloc(w).uop.flushOnCommit || io.alloc(w).uop.exception
       assert(rob_val(rob_tail) === false.B, "[rob] overwriting a valid entry.")
     }
 
     io.alloc(w).idx   := Mux((coreWidth == 1).B, rob_tail, Cat(rob_tail, w.U(log2Ceil(coreWidth).W)))
-    io.alloc(w).ready := !full
+    io.alloc(w).ready := rob_tail_free(w) && !full && !rob_do_unique
 
     // -----------------------------------------------
     // Writeback
 
-    // judge idx1 is older than idx2
-    def is_old_rob(idx1: UInt, idx2: UInt) = !((rob_head <= rob_tail) ^ (idx1 < idx2))
-
-    var oldest_excp_idx = rob_exception_info.bits.robIdx
     for (i <- 0 until wbPortNum) {
-      val wb_resp    = io.write(i)
-      val wb_uop     = wb_resp.bits.uop
-      val wb_brInfo  = wb_resp.bits.brInfo
-      val row_idx    = GetRowIdx(wb_uop.robIdx)
-      val rob_brInfo = rob_row_brInfo(rob_row_brInfo_idx)(row_idx)
+      val wb_resp   = io.write(i)
+      val wb_uop    = wb_resp.bits.uop
+      val wb_brInfo = wb_resp.bits.brInfo
+      val row_idx   = GetRowIdx(wb_uop.robIdx)
       when(wb_resp.valid && MatchBank(GetBankIdx(wb_uop.robIdx))) {
-        rob_bsy(row_idx)       := false.B
-        rob_uop(row_idx)       := wb_uop
-        rob_exception(row_idx) := wb_uop.exception
-        // TODO: Make this better
-        when(
-          !rob_brInfo.valid || !rob_brInfo.bits.cfiIdx.valid ||
-            (wb_brInfo.bits.cfiIdx.valid && wb_brInfo.bits.cfiIdx.bits < rob_brInfo.bits.cfiIdx.bits),
-        ) {
-          // printf("[ROB] row_id: %x, write brInfo with valid %d and mispred %d\n", wb_uop.robIdx, wb_brInfo.valid, wb_brInfo.bits.mispredict)
-          rob_brInfo := wb_brInfo
-        }
-      }
-      when(
-        wb_uop.exception &&
-          (!rob_exception_info.valid || (rob_exception_info.valid
-            && is_old_rob(wb_uop.robIdx, oldest_excp_idx))),
-      ) {
-        oldest_excp_idx = wb_uop.robIdx
-        rob_exception_info.valid      := wb_uop.exception
-        rob_exception_info.bits.ecode := wb_uop.ecode
-        rob_exception_info.bits.badv  := wb_uop.badv
+        rob_bsy(row_idx)      := !wb_uop.exception
+        rob_uop(row_idx)      := wb_uop
+        rob_redirect(row_idx) := rob_redirect(row_idx) || wb_uop.exception || wb_brInfo.valid
       }
     }
 
     // -----------------------------------------------
     // Commit
-    can_commit(w)          := rob_val(rob_head) && !rob_bsy(rob_head)
-    can_throw_exception(w) := rob_val(rob_head) && rob_exception(rob_head)
-    can_flush(w)           := can_commit(w) && rob_compact_uop(rob_head).flush
+
+    can_commit(w)   := rob_val(rob_head) && !rob_bsy(rob_head)
+    can_redirect(w) := rob_val(rob_head) && rob_redirect(rob_head)
 
     io.commit.valids(w) := will_commit(w)
     io.commit.uop(w)    := compact_to_uop(rob_compact_uop(rob_head), rob_uop(rob_head))
-    io.commit.ftqIdx    := rob_row_ftq(rob_head)
 
     when(will_commit(w)) {
-      rob_val(rob_head)                                  := false.B
-      rob_row_brInfo(rob_row_brInfo_idx)(rob_head).valid := false.B
+      rob_val(rob_head) := false.B
     }
 
     // -----------------------------------------------
@@ -222,106 +209,82 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     // Flush
 
     when(rob_flush) {
-      rob_exception_info.valid := false.B
       for (i <- 0 until robRowNum) {
-        rob_val(i)                                  := false.B
-        rob_row_brInfo(rob_row_brInfo_idx)(i).valid := false.B
+        rob_val(i) := false.B
       }
     }
 
-    dontTouch(rob_val)
-    dontTouch(rob_bsy)
+    if (params.debug) {
+      dontTouch(rob_val)
+      dontTouch(rob_bsy)
+      dontTouch(rob_redirect)
+    }
   } // for (w <- 0 until coreWidth)
 
   // -----------------------------------------------
   // Commit Logic
 
-  var block_commit    = false.B
-  var block_flush     = false.B
-  var block_exception = false.B
-  var will_etrn       = false.B
-  var commit_count    = 0.U
+  var block_commit   = false.B
+  var will_redirect  = false.B
+  var block_redirect = false.B
+  var commit_count   = 0.U
 
-  io.commit.brInfo.valid := false.B
-  io.commit.brInfo.bits  := DontCare
   for (w <- 0 until coreWidth) {
-    will_commit(w)          := can_commit(w) && !block_commit
-    will_flush(w)           := can_flush(w) && !block_commit && !block_flush
-    will_throw_exception(w) := can_throw_exception(w) && !block_commit && !block_exception
+    will_redirect = will_redirect || (can_redirect(w) && !block_commit && !block_redirect)
+    will_commit(w) := can_commit(w) && !block_commit
 
-    will_etrn = (can_commit(w) && io.commit.uop(w).ertn && !block_commit) || will_etrn
-
-    if (retireWidth == coreWidth) {
-      io.commit.brInfo := rob_row_brInfo(0)(rob_head)
-      block_commit = block_commit || (rob_head_vals(w) &&
-        (!can_commit(w) ||
-          (io.commit.brInfo.valid && io.commit.brInfo.bits.mispredict) ||
-          can_throw_exception(w) ||
-          can_flush(w) || io.commit.uop(w).ertn))
-    } else {
-      val brInfo = rob_row_brInfo(w)(rob_head)
-      // TODO: Make this valid when retiredWidth > 1
-      when(will_commit(w) && brInfo.valid) {
-        io.commit.brInfo := brInfo
-      }
-      commit_count = Mux(will_commit(w), commit_count + 1.U, commit_count)
-      block_commit = block_commit || (commit_count === retireWidth.U) ||
-        (rob_head_vals(w) &&
-          (!can_commit(w) ||
-            (brInfo.valid && brInfo.bits.mispredict) ||
-            can_throw_exception(w) ||
-            can_flush(w) || io.commit.uop(w).ertn))
+    commit_count = Mux(will_commit(w), commit_count + 1.U, commit_count)
+    block_commit = block_commit || (rob_head_vals(w) && (!can_commit(w) || can_redirect(w)))
+    if (retireWidth != coreWidth) {
+      block_commit = block_commit || (commit_count === retireWidth.U)
     }
-    block_flush = will_commit(w)
-    block_exception = will_commit(w)
+    block_redirect = will_commit(w)
   }
 
-  io.getPC.ftqIdx := io.commit.ftqIdx
-
-  val alignedFetchPC = params.fetchAlign(io.getPC.info.entry.fetchPC)
-  val pcs = VecInit((0 until coreWidth).map { w =>
-    alignedFetchPC | Cat(io.commit.uop(w).idx, Fill(log2Ceil(instBytes), 0.U))
-  })
-
-  val mispred       = io.commit.brInfo.valid && io.commit.brInfo.bits.mispredict
-  val flush         = will_flush.reduce(_ || _)
-  val flush_idx     = OHToUInt(will_flush)
-  val flushPC       = pcs(flush_idx) + instBytes.U
-  val exception     = will_throw_exception.reduce(_ || _)
-  val exception_idx = OHToUInt(will_throw_exception)
-  io.commit.redirect.valid := mispred | flush | exception | will_etrn
-  io.commit.redirect.bits := MuxCase(
-    DontCare,
+  io.ftqReq := rob_redirect_info.uop.ftqIdx
+  val redirect_uop_fetchPC = params.fetchAlign(io.ftqResp.entry.fetchPC)
+  val redirect_uop_pc      = (redirect_uop_fetchPC | Cat(rob_redirect_info.uop.idx, Fill(log2Ceil(instBytes), 0.U)))
+  io.redirect.valid := will_redirect
+  io.redirect.bits := MuxLookup(rob_redirect_info.redirectType, redirect_uop_pc + instBytes.U)(
     Seq(
-      exception -> io.eentry,
-      will_etrn -> io.era,
-      flush     -> flushPC,
-      mispred   -> io.commit.brInfo.bits.target,
+      REDIRECT_MISPREDICT.asUInt -> rob_redirect_info.target,
+      REDIRECT_EXCEPTION.asUInt  -> io.eentry,
+      REDIRECT_ETRN.asUInt       -> io.era,
+      REDIRECT_NEXT.asUInt       -> (redirect_uop_pc + instBytes.U),
     ),
   )
-  io.commit.exception.valid          := will_throw_exception.reduce(_ || _)
-  io.commit.exception.bits.pc        := Mux(rob_exception_info.bits.ecode === ECODE.ADEF.asUInt, io.getPC.info.entry.fetchPC, pcs(exception_idx))
-  io.commit.exception.bits.badv      := rob_exception_info.bits.badv
-  io.commit.exception.bits.ecode     := ECODE.getEcode(rob_exception_info.bits.ecode)
-  io.commit.exception.bits.ecode_sub := ECODE.getEsubCode(rob_exception_info.bits.ecode)
-  io.commit.ertn                     := will_etrn
+
+  io.exception.valid     := will_redirect && rob_redirect_info.redirectType === REDIRECT_EXCEPTION.asUInt
+  io.exception.epc       := redirect_uop_pc
+  io.exception.ecode     := ECODE.getEcode(rob_redirect_info.uop.ecode)
+  io.exception.ecode_sub := ECODE.getEsubCode(rob_redirect_info.uop.ecode)
+  io.exception.badv      := rob_redirect_info.uop.badv
+
+  io.ertn := will_redirect && rob_redirect_info.redirectType === REDIRECT_ETRN.asUInt
+
+  // -----------------------------------------------
+  // Redirect Tracking Logic
+  // only store the oldest redirect, since only one can happen!
 
   // -----------------------------------------------
   // ROB Head Logic
 
-  val finished_committing_row =
-    (io.commit.valids.reduce(_ || _)) &&
-      ((will_commit.asUInt ^ rob_head_vals.asUInt) === 0.U)
+  val finished_committing_row = io.commit.valids.reduce(_ || _) &&
+    (will_commit.asUInt ^ rob_head_vals.asUInt) === 0.U
 
   when(finished_committing_row) {
-    next_rob_head := WrapInc(rob_head, robRowNum)
+    rob_head := WrapInc(rob_head, robRowNum)
   }
 
   // -----------------------------------------------
   // ROB Tail Logic
 
-  when(!full && io.alloc.map(_.valid).reduce(_ || _)) {
-    rob_tail := WrapInc(rob_tail, robRowNum)
+  val next_rob_tail_free = rob_tail_free & ~VecInit(io.alloc.map(a => a.valid && a.ready)).asUInt
+  when(next_rob_tail_free === 0.U) {
+    rob_tail      := WrapInc(rob_tail, robRowNum)
+    rob_tail_free := Fill(coreWidth, 1.B)
+  }.otherwise {
+    rob_tail_free := next_rob_tail_free
   }
 
   // -----------------------------------------------
@@ -335,22 +298,27 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   // -----------------------------------------------
   // Flush Logic
 
-  rob_flush := io.commit.valids.reduce(_ || _) && io.commit.redirect.valid
+  rob_flush := io.redirect.valid
 
   when(rob_flush) {
-    rob_head := 0.U
-    rob_tail := 0.U
+    rob_head         := 0.U
+    rob_tail         := 0.U
+    rob_do_unique    := false.B
+    rob_redirect_val := false.B
+  }
+
+  // -----------------------------------------------
+  // Debug
+
+  if (params.debug) {
+    dontTouch(io)
+    dontTouch(can_commit)
+    dontTouch(can_redirect)
+    dontTouch(will_commit)
+    dontTouch(will_redirect)
+    dontTouch(rob_head_vals)
   }
 
   // -----------------------------------------------
   // -----------------------------------------------
-  dontTouch(io.commit)
-  dontTouch(can_commit)
-  dontTouch(can_flush)
-  dontTouch(can_throw_exception)
-  dontTouch(will_commit)
-  dontTouch(will_flush)
-  dontTouch(will_throw_exception)
-  dontTouch(will_etrn)
-  dontTouch(rob_head_vals)
 }

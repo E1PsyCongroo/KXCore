@@ -1,126 +1,208 @@
 package KXCore.superscalar.core.frontend
 
+import java.io._
 import chisel3._
 import chisel3.util._
 import chisel3.util.random._
+import chisel3.util.experimental._
+import firrtl.annotations.MemoryLoadFileType
+import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
 
-class BTB(implicit params: CoreParameters) extends Module {
-  import params._
-  import commonParams.{vaddrWidth, instBytes}
-  import frontendParams._
-  import btbParams._
-  private val tagWidth = vaddrWidth - log2Ceil(nSets) - log2Ceil(instBytes)
-
-  def getSet(fetchPC: UInt): UInt = {
-    fetchIdx(fetchPC)(log2Ceil(nSets) - 1, 0)
+object BTB {
+  def getSet(fetchPC: UInt)(implicit params: CoreParameters): UInt = {
+    import params.frontendParams.btbParams._
+    params.fetchIdx(fetchPC)(log2Ceil(nSets) - 1, 0)
   }
 
-  def getTag(fetchPC: UInt): UInt = {
-    fetchIdx(fetchPC) >> log2Ceil(nSets)
+  def getTag(fetchPC: UInt)(implicit params: CoreParameters): UInt = {
+    import params.frontendParams.btbParams._
+    params.fetchIdx(fetchPC) >> log2Ceil(nSets)
   }
 
-  class BTBEntry extends Bundle {
-    val offset   = SInt(offsetWidth.W)
+  class BTBEntry(implicit params: CoreParameters) extends Bundle {
+    val offset   = UInt(params.frontendParams.btbParams.offsetWidth.W)
     val extended = Bool()
   }
 
-  class BTBMeta extends Bundle {
+  class BTBMeta(implicit params: CoreParameters) extends Bundle {
+    import params.{fetchBytes, commonParams, frontendParams}
+    import commonParams.{vaddrWidth}
+    import frontendParams._
+    import btbParams._
+    private val tagWidth = vaddrWidth - log2Ceil(nSets) - log2Ceil(fetchBytes)
+
     val isBr = Bool()
     val tag  = UInt(tagWidth.W)
   }
 
-  class BTBPredictMeta extends Bundle {
-    val hits     = Vec(fetchWidth, Bool())
-    val writeWay = UInt(log2Ceil(nWays).W)
+  def generateMetaHexFile(implicit params: CoreParameters): String = {
+    import params.{frontendParams}
+    import frontendParams.{fetchWidth, btbParams}
+    import btbParams.{nSets}
+
+    val fileName = s"btb_meta_${nSets}_${fetchWidth}.bin"
+    val hexFile  = new File("build", fileName)
+
+    if (!hexFile.exists()) {
+      val writer = new PrintWriter(hexFile)
+      try {
+        val entryBits = "0" * (new BTBMeta).getWidth * fetchWidth
+        for (_ <- 0 until nSets) {
+          writer.println(entryBits)
+        }
+      } finally {
+        writer.close()
+      }
+    }
+    fileName
   }
 
-  class BTBStage0to1 extends Module {
+  def generateEntryHexFile(implicit params: CoreParameters): String = {
+    import params.{frontendParams}
+    import frontendParams.{fetchWidth, btbParams}
+    import btbParams.{nSets}
+
+    val fileName = s"btb_entry_${nSets}_${fetchWidth}.bin"
+    val hexFile  = new File("build", fileName)
+
+    if (!hexFile.exists()) {
+      val writer = new PrintWriter(hexFile)
+      try {
+        val entryBits = "0" * (new BTBEntry).getWidth * fetchWidth
+        for (_ <- 0 until nSets) {
+          writer.println(entryBits)
+        }
+      } finally {
+        writer.close()
+      }
+    }
+    fileName
+  }
+
+  class BTBStorage(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth, instBytes}
+    import frontendParams._
+    import btbParams._
+
+    private val metaInitFile  = generateMetaHexFile
+    private val entryInitFile = generateEntryHexFile
+
     val io = IO(new Bundle {
-      val flush = Input(Bool())
-      val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val resp = Decoupled(new Bundle {
-        val fetchPC = UInt(vaddrWidth.W)
-        val meta    = Vec(nWays, Vec(fetchWidth, new BTBMeta))
-        val btb     = Vec(nWays, Vec(fetchWidth, new BTBEntry))
-        val ebtb    = UInt(vaddrWidth.W)
-      })
-      val update = Flipped(Valid(new BranchPredictionUpdate))
+      val read = new Bundle {
+        val en   = Input(Bool())
+        val set  = Input(UInt(log2Ceil(nSets).W))
+        val meta = Output(Vec(nWays, Vec(fetchWidth, new BTBMeta)))
+        val btb  = Output(Vec(nWays, Vec(fetchWidth, new BTBEntry)))
+        val ebtb = Output(UInt(vaddrWidth.W))
+      }
+      val update = Flipped(new BranchPredictionUpdate)
     })
 
-    val doingReset = RegInit(true.B)
-    val resetIdx   = RegInit(0.U(log2Ceil(nSets).W))
-    resetIdx := resetIdx + doingReset
-    when(resetIdx === (nSets - 1).U) { doingReset := false.B }
+    val metas = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, UInt((new BTBMeta).getWidth.W))) }
+    metas.foreach(meta => loadMemoryFromFileInline(meta, metaInitFile, MemoryLoadFileType.Binary))
+    val btbs = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, UInt((new BTBEntry).getWidth.W))) }
+    btbs.foreach(btb => loadMemoryFromFileInline(btb, entryInitFile, MemoryLoadFileType.Binary))
+    val ebtbs = SyncReadMem(extendedNSets, UInt(vaddrWidth.W))
 
-    val en     = RegInit(false.B)
-    val nextEn = WireDefault(en & ~io.resp.ready)
-    en            := Mux(io.req.ready, io.req.valid, nextEn)
-    io.req.ready  := ((nextEn === 0.U) || io.flush) && !doingReset
-    io.resp.valid := en && !io.flush
+    io.read.meta := VecInit(metas.map(_.read(io.read.set, io.read.en).asTypeOf(new BTBMeta)))
+    io.read.btb  := VecInit(btbs.map(_.read(io.read.set, io.read.en).asTypeOf(new BTBEntry)))
+    io.read.ebtb := ebtbs.read(io.read.set, io.read.en)
 
-    val holdReqReg = RegEnable(io.req.bits, io.req.ready)
-    val readSet    = getSet(Mux(io.req.ready, io.req.bits, holdReqReg))
+    val updateSet = getSet(io.update.fetchPC)
+    val updateTag = getTag(io.update.fetchPC)
+    val updateWay = io.update.meta.btb
 
-    val meta = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, new BTBMeta)) }
-    val btb  = Seq.fill(nWays) { SyncReadMem(nSets, Vec(fetchWidth, new BTBEntry)) }
-    val ebtb = SyncReadMem(extendedNSets, UInt(vaddrWidth.W))
-
-    val rmeta = VecInit(meta.map(m => m.read(readSet)))
-    val rbtb  = VecInit(btb.map(m => m.read(readSet)))
-    val rebtb = ebtb.read(readSet)
-
-    val updateBits       = io.update.bits
-    val updateSet        = getSet(updateBits.fetchPC)
-    val updateTag        = getTag(updateBits.fetchPC)
-    val updateMeta       = updateBits.meta.btb
-    val maxOffset        = Cat(0.B, Fill(offsetWidth - 1, 1.B)).asSInt
-    val minOffset        = Cat(1.B, Fill(offsetWidth - 1, 0.B)).asSInt
-    val newOffset        = (updateBits.target.asSInt - (updateBits.fetchPC + (updateBits.cfiIdx << log2Ceil(instBytes))).asSInt)
+    val maxOffset = Cat(0.B, Fill(offsetWidth - 1, 1.B), Fill(log2Ceil(instBytes), 0.B)).asSInt
+    val minOffset = Cat(1.B, Fill(offsetWidth - 1, 0.B), Fill(log2Ceil(instBytes), 0.B)).asSInt
+    val newOffset = io.update.target.asSInt -
+      (params.fetchAlign(io.update.fetchPC) + (io.update.cfiIdx.bits << log2Ceil(instBytes))).asSInt
     val offsetIsExtended = (newOffset > maxOffset || newOffset < minOffset)
     val updateBtbData    = Wire(new BTBEntry)
     updateBtbData.offset   := newOffset
     updateBtbData.extended := offsetIsExtended
-    val updateBtbMask  = UIntToOH(updateBits.cfiIdx) & Fill(fetchWidth, io.update.valid && updateBits.cfiTaken)
+    val updateBtbMask = UIntToOH(io.update.cfiIdx.valid) & Fill(fetchWidth, io.update.cfiIdx.valid)
+
     val updateMetaData = Wire(Vec(fetchWidth, new BTBMeta))
-    val updateMetaMask = UIntToOH(updateBits.cfiIdx) & Fill(fetchWidth, io.update.valid && updateBits.cfiTaken)
     for (i <- 0 until fetchWidth) {
-      updateMetaData(i).isBr := updateBits.cfiIsBr
+      updateMetaData(i).isBr := io.update.brMask
       updateMetaData(i).tag  := updateTag
     }
+    val updateMetaMask = updateBtbMask | io.update.brMask
 
     for (w <- 0 until nWays) {
-      when(doingReset || updateMeta === w.U) {
-        val resetBtbData = Wire(new BTBEntry)
-        resetBtbData.offset   := 0.S
-        resetBtbData.extended := false.B
-        btb(w).write(
-          Mux(doingReset, resetIdx, updateSet),
-          Mux(doingReset, VecInit(Seq.fill(fetchWidth)(resetBtbData)), VecInit(Seq.fill(fetchWidth)(updateBtbData))),
-          Mux(doingReset, Fill(fetchWidth, true.B), updateBtbMask.asUInt).asBools,
+      when(io.update.valid && updateWay === w.U) {
+        btbs(w).write(
+          updateSet,
+          VecInit.fill(fetchWidth)(updateBtbData.asUInt),
+          updateBtbMask.asBools,
         )
-        val resetMetaData = Wire(new BTBMeta)
-        resetMetaData.isBr := false.B
-        resetMetaData.tag  := 0.U
-        meta(w).write(
-          Mux(doingReset, resetIdx, updateSet),
-          Mux(doingReset, VecInit(Seq.fill(fetchWidth)(resetMetaData)), updateMetaData),
-          Mux(doingReset, Fill(fetchWidth, true.B), updateMetaMask.asUInt).asBools,
+        metas(w).write(
+          updateSet,
+          VecInit(updateMetaData.map(_.asUInt)),
+          updateMetaMask.asBools,
         )
       }
     }
-    when(updateBtbMask =/= 0.U && offsetIsExtended) {
-      ebtb.write(updateSet, updateBits.target)
+    when(io.update.valid && updateBtbMask =/= 0.U && offsetIsExtended) {
+      ebtbs.write(updateSet, io.update.target)
     }
 
-    io.resp.bits.fetchPC := holdReqReg
-    io.resp.bits.meta    := rmeta
-    io.resp.bits.btb     := rbtb
-    io.resp.bits.ebtb    := rebtb
+    dontTouch(updateSet)
+    dontTouch(updateWay)
+    dontTouch(updateTag)
+    dontTouch(newOffset)
+    dontTouch(updateBtbData)
+    dontTouch(updateBtbMask)
+    dontTouch(updateMetaData)
+    dontTouch(updateMetaMask)
   }
 
-  class BTBStage1 extends Module {
+  class BTBStage0to1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth, instBytes}
+    import frontendParams._
+    import btbParams._
+
+    val io = IO(new Bundle {
+      val flush = Input(Bool())
+      val infoRead = new Bundle {
+        val en   = Output(Bool())
+        val set  = Output(UInt(log2Ceil(nSets).W))
+        val meta = Input(Vec(nWays, Vec(fetchWidth, new BTBMeta)))
+        val btb  = Input(Vec(nWays, Vec(fetchWidth, new BTBEntry)))
+        val ebtb = Input(UInt(vaddrWidth.W))
+      }
+      val holdRead = Input(UInt(vaddrWidth.W))
+      val req      = Flipped(Decoupled(UInt(vaddrWidth.W)))
+      val resp = Decoupled(new Bundle {
+        val meta = Vec(nWays, Vec(fetchWidth, new BTBMeta))
+        val btb  = Vec(nWays, Vec(fetchWidth, new BTBEntry))
+        val ebtb = UInt(vaddrWidth.W)
+      })
+    })
+
+    val en     = RegInit(false.B)
+    val nextEn = WireDefault(en & ~io.resp.ready)
+    en            := Mux(io.req.ready, io.req.valid, nextEn)
+    io.req.ready  := (nextEn === 0.U) || io.flush
+    io.resp.valid := en && !io.flush
+
+    io.infoRead.en    := io.req.fire || en
+    io.infoRead.set   := getSet(Mux(io.req.fire, io.req.bits, io.holdRead))
+    io.resp.bits.meta := io.infoRead.meta
+    io.resp.bits.btb  := io.infoRead.btb
+    io.resp.bits.ebtb := io.infoRead.ebtb
+  }
+
+  class BTBStage1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import commonParams.{vaddrWidth, instBytes, instWidth}
+    import frontendParams._
+    import btbParams._
+
     val io = IO(new Bundle {
       val req = Flipped(Decoupled(new Bundle {
         val fetchPC = UInt(vaddrWidth.W)
@@ -130,7 +212,7 @@ class BTB(implicit params: CoreParameters) extends Module {
       }))
       val resp = Decoupled(new Bundle {
         val pred = Vec(fetchWidth, new BranchPrediction)
-        val meta = new BTBPredictMeta
+        val meta = UInt(log2Ceil(nWays).W)
       })
     })
 
@@ -138,14 +220,13 @@ class BTB(implicit params: CoreParameters) extends Module {
     io.resp.valid := io.req.valid
 
     val tag = getTag(io.req.bits.fetchPC)
-
     val hitOHs = VecInit((0 until fetchWidth).map { i =>
       VecInit((0 until nWays).map { w =>
         io.req.bits.meta(w)(i).tag === tag
       })
     })
-    val hits    = hitOHs.map(_.reduce(_ || _))
-    val hitWays = hitOHs.map(PriorityEncoder(_))
+    val hits    = VecInit(hitOHs.map(_.reduce(_ || _)))
+    val hitWays = VecInit(hitOHs.map(PriorityEncoder(_)))
 
     for (i <- 0 until fetchWidth) {
       val hitWay = hitWays(i)
@@ -155,7 +236,8 @@ class BTB(implicit params: CoreParameters) extends Module {
       io.resp.bits.pred(i).target.bits := Mux(
         btb.extended,
         io.req.bits.ebtb,
-        (fetchAlign(io.req.bits.fetchPC).asSInt + (i << log2Ceil(instBytes)).S + btb.offset).asUInt,
+        params.fetchAlign(io.req.bits.fetchPC) + (i << log2Ceil(instBytes)).U +
+          Sext(Cat(btb.offset, "b00".U(log2Ceil(instBytes).W)), instWidth),
       )
       io.resp.bits.pred(i).isBr  := hits(i) && meta.isBr
       io.resp.bits.pred(i).isJmp := hits(i) && !meta.isBr
@@ -174,27 +256,12 @@ class BTB(implicit params: CoreParameters) extends Module {
       0.U
     }
 
-    io.resp.bits.meta.hits     := hits
-    io.resp.bits.meta.writeWay := Mux(hits.reduce(_ || _), PriorityEncoder(hitOHs.map(_.asUInt).reduce(_ | _)), allocWay)
+    io.resp.bits.meta := Mux(hits.reduce(_ || _), PriorityEncoder(hitOHs.map(_.asUInt).reduce(_ | _)), allocWay)
+
+    dontTouch(tag)
+    dontTouch(hitOHs)
+    dontTouch(hits)
+    dontTouch(hitWays)
   }
 
-  val io = IO(new Bundle {
-    val flush = Input(Bool())
-    val req   = Flipped(Decoupled(UInt(vaddrWidth.W)))
-    val resp = Decoupled(new Bundle {
-      val pred = Vec(fetchWidth, new BranchPrediction)
-      val meta = new BTBPredictMeta
-    })
-    val update = Flipped(Valid(new BranchPredictionUpdate))
-  })
-
-  val stage0to1 = Module(new BTBStage0to1)
-  val stage1    = Module(new BTBStage1)
-
-  stage0to1.io.flush  := io.flush
-  stage0to1.io.update := io.update
-
-  io.req            <> stage0to1.io.req
-  stage0to1.io.resp <> stage1.io.req
-  stage1.io.resp    <> io.resp
 }

@@ -19,7 +19,7 @@ object Elaborate extends App {
   implicit val cacheParams: CacheParameters   = CacheParameters()
   implicit val axiParams: AXIBundleParameters = AXIBundleParameters()
   circt.stage.ChiselStage.emitSystemVerilogFile(
-    new AXIInterconnect(axiParams, 2, Seq(Seq(AddressSet(0, -1))), Seq(false)),
+    new ICache.ICacheStorage,
     args,
     firtoolOptions,
   )

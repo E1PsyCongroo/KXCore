@@ -5,6 +5,7 @@ import chisel3.util._
 import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
+import KXCore.superscalar.core.backend._
 
 /** Queue to store the fetch PC and other relevant branch predictor signals that are inflight in the processor.
   *
@@ -14,32 +15,35 @@ import KXCore.superscalar.core._
 class FetchTargetQueue(implicit params: CoreParameters) extends Module {
   import params.{commonParams, frontendParams, backendParams}
   import commonParams.{vaddrWidth}
-  import frontendParams.{ftqNum}
+  import frontendParams.{ftqNum, ftqIdxWidth}
   import backendParams.{coreWidth}
-  private val idxWidth = log2Ceil(ftqNum)
 
   val io = IO(new Bundle {
     // Enqueue one entry for every fetch cycle.
     val enq = Flipped(Decoupled(new FetchBundle()))
     // Pass to FetchBuffer (newly fetched instructions).
-    val enqIdx = Output(UInt(idxWidth.W))
+    val enqIdx = Output(UInt(ftqIdxWidth.W))
     // ROB tells us the youngest committed ftq_idx to remove from FTQ.
-    val deq = Flipped(Valid(new Bundle {
-      val idx      = UInt(idxWidth.W)
-      val redirect = Bool()
-      val brUpdate = Valid(new BrUpdateInfo)
-    }))
+    val deq = Flipped(Valid(UInt(ftqIdxWidth.W)))
+    val redirect = Input(new Bundle {
+      val valid      = Bool()
+      val idx        = UInt(ftqIdxWidth.W)
+      val brRecovery = new BrRecoveryInfo
+    })
 
     // Give PC info to BranchUnit.
-    val getPC = Vec(3, new GetPCFromFtqIO())
+    val reqs  = Input(Vec(3, UInt(ftqIdxWidth.W)))
+    val resps = Output(Vec(3, new FTQInfo))
 
-    val bpuUpdate = Output(Valid(new BranchPredictionUpdate))
-
+    val bpuUpdate = Output(new BranchPredictionUpdate)
   })
-  val deq_ptr = RegInit(0.U(idxWidth.W))
-  val enq_ptr = RegInit(1.U(idxWidth.W))
 
-  val full = deq_ptr === WrapInc(enq_ptr, ftqNum)
+  val bpu_ptr    = RegInit(0.U(ftqIdxWidth.W))
+  val deq_ptr    = RegInit(0.U(ftqIdxWidth.W))
+  val enq_ptr    = RegInit(0.U(ftqIdxWidth.W))
+  val maybe_full = RegInit(false.B)
+
+  val full = maybe_full && enq_ptr === bpu_ptr
   io.enq.ready := !full
 
   val ram = Reg(Vec(ftqNum, new FTQBundle))
@@ -48,44 +52,74 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
 
   when(do_enq) {
     val new_entry = Wire(new FTQBundle)
-    new_entry.fetchPC  := io.enq.bits.pc
-    new_entry.taken    := io.enq.bits.cfiIdx.valid
-    new_entry.cfiIdx   := io.enq.bits.cfiIdx.bits
-    new_entry.meta.bim := io.enq.bits.bpuMeta.bim
-    new_entry.meta.btb := io.enq.bits.bpuMeta.btb
-    ram(enq_ptr)       := new_entry
-    enq_ptr            := WrapInc(enq_ptr, ftqNum)
+    new_entry.fetchPC      := io.enq.bits.pc
+    new_entry.brMask       := io.enq.bits.brMask
+    new_entry.cfiIdx.valid := io.enq.bits.cfiIdx.valid
+    new_entry.cfiIdx.bits  := io.enq.bits.cfiIdx.bits
+    new_entry.cfiIsB       := io.enq.bits.bMask(io.enq.bits.cfiIdx.bits)
+    new_entry.cfiIsBr      := io.enq.bits.brMask(io.enq.bits.cfiIdx.bits)
+    new_entry.cfiIsJirl    := io.enq.bits.jirlMask(io.enq.bits.cfiIdx.bits)
+    new_entry.meta.bim     := io.enq.bits.bpuMeta.bim
+    new_entry.meta.btb     := io.enq.bits.bpuMeta.btb
+    ram(enq_ptr)           := new_entry
+    enq_ptr                := WrapInc(enq_ptr, ftqNum)
+    maybe_full             := true.B
   }
 
   io.enqIdx := enq_ptr
 
   when(io.deq.valid) {
-    deq_ptr := io.deq.bits.idx
-    when(io.deq.bits.redirect) {
-      enq_ptr := WrapInc(io.deq.bits.idx, ftqNum)
-    }
+    deq_ptr    := io.deq.bits
+    maybe_full := false.B
   }
 
-  val bpuUpdate = Wire(new BranchPredictionUpdate)
-  bpuUpdate.fetchPC   := ram(io.deq.bits.idx).fetchPC
-  bpuUpdate.cfiIdx    := io.deq.bits.brUpdate.bits.cfiIdx.bits
-  bpuUpdate.cfiIsBr   := io.deq.bits.brUpdate.bits.cfiIsBr
-  bpuUpdate.cfiIsB    := io.deq.bits.brUpdate.bits.cfiIsB
-  bpuUpdate.cfiIsJirl := io.deq.bits.brUpdate.bits.cfiIsJirl
-  bpuUpdate.target    := io.deq.bits.brUpdate.bits.target
-  bpuUpdate.cfiTaken  := io.deq.bits.brUpdate.bits.cfiIdx.valid
-  bpuUpdate.meta      := ram(io.deq.bits.idx).meta
+  val redirect_entry     = ram(io.redirect.idx)
+  val redirect_new_entry = WireInit(redirect_entry)
+  when(io.redirect.valid) {
+    enq_ptr    := WrapInc(io.redirect.idx, ftqNum)
+    maybe_full := false.B
 
-  io.bpuUpdate.valid := io.deq.valid && io.deq.bits.brUpdate.valid
-  io.bpuUpdate.bits  := bpuUpdate
+    when(io.redirect.brRecovery.valid) {
+      redirect_new_entry.brMask := Mux(
+        io.redirect.brRecovery.cfiIdx.valid,
+        MaskLower(UIntToOH(io.redirect.brRecovery.cfiIdx.bits)) & redirect_entry.brMask,
+        redirect_entry.brMask,
+      )
+      redirect_new_entry.cfiIdx    := io.redirect.brRecovery.cfiIdx
+      redirect_new_entry.cfiIsB    := io.redirect.brRecovery.cfiIsB
+      redirect_new_entry.cfiIsBr   := io.redirect.brRecovery.cfiIsBr
+      redirect_new_entry.cfiIsJirl := io.redirect.brRecovery.cfiIsJirl
+    }
+    ram(io.redirect.idx) := redirect_new_entry
+  }
+
+  when(bpu_ptr =/= deq_ptr) {
+    bpu_ptr := WrapInc(bpu_ptr, ftqNum)
+
+    val bpuEntry = ram(bpu_ptr)
+    val target   = ram(WrapInc(bpu_ptr, ftqNum)).fetchPC
+
+    io.bpuUpdate.valid     := bpuEntry.cfiIdx.valid || bpuEntry.brMask =/= 0.U
+    io.bpuUpdate.fetchPC   := bpuEntry.fetchPC
+    io.bpuUpdate.brMask    := bpuEntry.brMask
+    io.bpuUpdate.cfiIdx    := bpuEntry.cfiIdx
+    io.bpuUpdate.cfiIsB    := bpuEntry.cfiIsB
+    io.bpuUpdate.cfiIsBr   := bpuEntry.cfiIsBr
+    io.bpuUpdate.cfiIsJirl := bpuEntry.cfiIsJirl
+    io.bpuUpdate.target    := target
+    io.bpuUpdate.meta      := bpuEntry.meta
+  }
 
   // -------------------------------------------------------------
   // **** Core Read PC ****
   // -------------------------------------------------------------
 
   for (i <- 0 until 3) {
-    val idx = io.getPC(i).ftqIdx
-    io.getPC(i).info.valid := idx =/= enq_ptr
-    io.getPC(i).info.entry := ram(idx)
+    val idx = io.reqs(i)
+    io.resps(i).valid := idx =/= enq_ptr || io.enq.fire
+    io.resps(i).entry := ram(idx)
+    when(idx === enq_ptr) {
+      io.resps(i).entry.fetchPC := io.enq.bits.pc
+    }
   }
 }
