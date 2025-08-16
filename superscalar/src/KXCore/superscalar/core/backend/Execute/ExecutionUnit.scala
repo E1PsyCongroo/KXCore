@@ -33,16 +33,20 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   val s0_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
   s0_regs.valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy &&
     io_read_reqs.map(req => (!req.valid || req.ready)).reduce(_ && _)
-  s0_regs.bits(0) := io_read_resps(0)
+  iss_uop_ext.ready(0) := s0_regs.fire
+  s0_regs.bits(0)      := io_read_resps(0)
   if (nReaders == 2) {
     s0_regs.bits(1) := io_read_resps(1)
   }
-  iss_uop_ext.ready(0) := s0_regs.fire
 
   val s0_uop = Wire(Decoupled(new MicroOp))
   s0_uop.valid         := iss_uop_ext.valid(1)
-  s0_uop.bits          := iss_uop_ext.bits
   iss_uop_ext.ready(1) := s0_uop.ready
+  s0_uop.bits          := iss_uop_ext.bits
+
+  s0_uop.bits.debug      := 0.U.asTypeOf(s0_uop.bits.debug.cloneType)
+  s0_uop.bits.debug.pc   := iss_uop_ext.bits.debug.pc
+  s0_uop.bits.debug.inst := iss_uop_ext.bits.debug.inst
 
   val s1_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
   PipeConnect(Some(io_kill), s0_regs, s1_regs)
@@ -245,12 +249,17 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
 
   io_mem_resp.valid := !io_kill && ((state === sWaitResp) &&
     ((io_axi.r.fire && io_axi.r.bits.id === 1.U) || (io_axi.b.fire && io_axi.b.bits.id === 1.U)))
-  io_mem_resp.bits.uop                  := s2_data.bits.uop
-  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(LSU_LDB, LSU_LDBU, LSU_LDH, LSU_LDHU, LSU_LDW).map(_.asUInt === s2_data.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop  := s2_data.bits.uop
+  io_mem_resp.bits.data := rdata
+
+  io_mem_resp.bits.uop.debug.wen        := io_mem_resp.bits.uop.ldst =/= 0.U
+  io_mem_resp.bits.uop.debug.wdest      := io_mem_resp.bits.uop.ldst
+  io_mem_resp.bits.uop.debug.wdata      := io_mem_resp.bits.data
+  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(LSU_LDB, LSU_LDBU, LSU_LDH, LSU_LDHU, LSU_LDW).map(_.asUInt === io_mem_resp.bits.uop.lsuCmd)).asUInt
   io_mem_resp.bits.uop.debug.loadVaddr  := s2_data.bits.vaddr
   io_mem_resp.bits.uop.debug.loadPaddr  := s2_data.bits.paddr
   io_mem_resp.bits.uop.debug.loadData   := rdata
-  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === s2_data.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === io_mem_resp.bits.uop.lsuCmd)).asUInt
   io_mem_resp.bits.uop.debug.storeVaddr := s2_data.bits.vaddr
   io_mem_resp.bits.uop.debug.storePaddr := s2_data.bits.paddr
   io_mem_resp.bits.uop.debug.storeData := s2_data.bits.writeData & (VecInit(
@@ -259,7 +268,6 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
       Fill(8, bit) << (i * 8)
     },
   ).reduce(_ | _))
-  io_mem_resp.bits.data := rdata
 
   io_mem_xcep.valid     := !io_kill && (state === sSendXcep)
   io_mem_xcep.bits      := s2_data.bits.uop
@@ -432,9 +440,20 @@ class UniqueExeUnit(
   s1_regs.ready := false.B
   s1_uop.ready  := false.B
 
-  val io_mul_resp = if (hasMul) {
-    val io_mul_resp = IO(Output(Decoupled(new ExeUnitResp)))
-    val mulUnit     = Module(new MultiplyUnit)
+  val mul_div_arbiter = Module(new Arbiter(new ExeUnitResp, 2))
+  mul_div_arbiter.io.in(0).valid := false.B
+  mul_div_arbiter.io.in(0).bits  := DontCare
+  mul_div_arbiter.io.in(1).valid := false.B
+  mul_div_arbiter.io.in(1).bits  := DontCare
+  mul_div_arbiter.io.out.ready   := true.B
+
+  val io_mul_div_resp = if (hasMul || hasDiv) Some(IO(Valid(new ExeUnitResp))) else None
+  io_mul_div_resp.get.valid := mul_div_arbiter.io.out.valid
+  io_mul_div_resp.get.bits  := mul_div_arbiter.io.out.bits
+
+  if (hasMul) {
+    val mul_resp = Wire(Decoupled(new ExeUnitResp))
+    val mulUnit  = Module(new MultiplyUnit)
     mulUnit.io.kill := io_kill
 
     mulUnit.io.req.bits.rs1_data := s1_regs.bits(0)
@@ -447,18 +466,22 @@ class UniqueExeUnit(
       s1_uop.ready         := mulUnit.io.req.ready
       s1_regs.ready        := mulUnit.io.req.ready
     }
-    io_mul_resp.valid     := mulUnit.io.resp.valid
-    mulUnit.io.resp.ready := io_mul_resp.ready
-    io_mul_resp.bits      := mulUnit.io.resp.bits
+    mul_resp.valid        := mulUnit.io.resp.valid
+    mulUnit.io.resp.ready := mul_resp.ready
+    mul_resp.bits         := mulUnit.io.resp.bits
 
-    Some(io_mul_resp)
-  } else {
-    None
+    mul_resp.bits.uop.debug.wen   := mul_resp.bits.uop.ldst =/= 0.U
+    mul_resp.bits.uop.debug.wdest := mul_resp.bits.uop.ldst
+    mul_resp.bits.uop.debug.wdata := mul_resp.bits.data
+
+    mul_div_arbiter.io.in(0).valid := mul_resp.valid
+    mul_div_arbiter.io.in(0).bits  := mul_resp.bits
+    mul_resp.ready                 := mul_div_arbiter.io.in(0).ready
   }
 
-  val io_div_resp = if (hasDiv) {
-    val io_div_resp = IO(Output(DecoupledIO(new ExeUnitResp)))
-    val divUnit     = Module(new DivUnit)
+  if (hasDiv) {
+    val div_resp = Wire((DecoupledIO(new ExeUnitResp)))
+    val divUnit  = Module(new DivUnit)
     divUnit.io.kill := io_kill
 
     divUnit.io.req.bits.rs1_data := s1_regs.bits(0)
@@ -471,13 +494,17 @@ class UniqueExeUnit(
       s1_regs.ready        := divUnit.io.req.ready
       s1_uop.ready         := divUnit.io.req.ready
     }
-    io_div_resp.valid     := divUnit.io.resp.valid
-    divUnit.io.resp.ready := io_div_resp.ready
-    io_div_resp.bits      := divUnit.io.resp.bits
+    div_resp.valid        := divUnit.io.resp.valid
+    divUnit.io.resp.ready := div_resp.ready
+    div_resp.bits         := divUnit.io.resp.bits
 
-    Some(io_div_resp)
-  } else {
-    None
+    div_resp.bits.uop.debug.wen   := div_resp.bits.uop.ldst =/= 0.U
+    div_resp.bits.uop.debug.wdest := div_resp.bits.uop.ldst
+    div_resp.bits.uop.debug.wdata := div_resp.bits.data
+
+    mul_div_arbiter.io.in(1).valid := div_resp.valid
+    mul_div_arbiter.io.in(1).bits  := div_resp.bits
+    div_resp.ready                 := mul_div_arbiter.io.in(1).ready
   }
 
   val (io_csr_access, io_csr_resp, io_csr_xcep) = if (hasCSR) {
@@ -526,6 +553,15 @@ class UniqueExeUnit(
       )
     }
 
+    io_csr_resp.bits.uop.debug.is_CNTinst := Seq(CSRType.RDCNTID, CSRType.RDCNTVL, CSRType.RDCNTVH).map(_.asUInt === io_csr_resp.bits.uop.csrCmd).reduce(_ || _)
+    io_csr_resp.bits.uop.debug.wen        := io_csr_resp.bits.uop.ldst =/= 0.U
+    io_csr_resp.bits.uop.debug.wdest      := io_csr_resp.bits.uop.ldst
+    io_csr_resp.bits.uop.debug.wdata      := io_csr_resp.bits.data
+    io_csr_resp.bits.uop.debug.csr_rstat := Seq(CSRType.RD, CSRType.RW, CSRType.XCHG)
+      .map(_.asUInt === io_csr_resp.bits.uop.csrCmd)
+      .reduce(_ || _) && io_csr_resp.bits.uop.imm === CSRAddr.ESTAT.U
+    io_csr_resp.bits.uop.debug.csr_data := io_csr_resp.bits.data
+
     (Some(io_csr_access), Some(io_csr_resp), Some(io_csr_xcep))
   } else {
     (None, None, None)
@@ -570,8 +606,12 @@ class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   alu.io.resp.ready := true.B
   io_alu_resp.bits  := alu.io.resp.bits
 
+  io_alu_resp.bits.uop.debug.wen   := alu.io.resp.bits.uop.ldst =/= 0.U
+  io_alu_resp.bits.uop.debug.wdest := alu.io.resp.bits.uop.ldst
+  io_alu_resp.bits.uop.debug.wdata := alu.io.resp.bits.data
+
   val io_alu_brInfo = IO(Output(new BrRecoveryInfo))
-  io_alu_brInfo := alu.io.brinfo
+  io_alu_brInfo := alu.io.brInfo
 
   if (params.debug) {
     dontTouch(s1_ftq)

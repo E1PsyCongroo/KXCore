@@ -17,7 +17,7 @@ abstract class FunctionalUnit(val isAluUnit: Boolean = false)(implicit params: C
     val resp = new DecoupledIO(new ExeUnitResp)
 
     // only used by branch unit
-    val brinfo = if (isAluUnit) Output(new BrRecoveryInfo) else null
+    val brInfo = if (isAluUnit) Output(new BrRecoveryInfo) else null
   })
 }
 
@@ -32,7 +32,7 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
   // operand 1 select
   // Get the uop PC for jumps
   val block_pc = params.fetchAlign(io.req.bits.ftq_info(0).entry.fetchPC)
-  val uop_pc   = (block_pc | Cat(uop.idx, Fill(log2Ceil(instBytes), 0.U)))
+  val uop_pc   = block_pc | uop.pcLow
   val op1_data = MuxLookup(uop.op1Sel, 0.U)(
     Seq(
       OP1Type.OP1_RS1.asUInt  -> io.req.bits.rs1_data,
@@ -69,9 +69,9 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
       io.req.bits.uop.isBr -> Mux(
         alu.io.cmp_out,
         !io.req.bits.ftq_info(0).entry.cfiIdx.valid ||
-          io.req.bits.ftq_info(0).entry.cfiIdx.bits =/= io.req.bits.uop.idx,
+          io.req.bits.ftq_info(0).entry.cfiIdx.bits =/= io.req.bits.uop.pcLow(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes)),
         io.req.bits.ftq_info(0).entry.cfiIdx.valid &&
-          io.req.bits.ftq_info(0).entry.cfiIdx.bits === io.req.bits.uop.idx,
+          io.req.bits.ftq_info(0).entry.cfiIdx.bits === io.req.bits.uop.pcLow(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes)),
       ),
     ),
   )
@@ -81,16 +81,15 @@ class ALUUnit(implicit params: CoreParameters) extends FunctionalUnit(isAluUnit 
     uop_pc,
   ) + Mux(brInfo.cfiIdx.valid, io.req.bits.uop.imm, 4.U)
   brInfo.cfiIdx.valid := brInfo.cfiIsB || brInfo.cfiIsJirl || (brInfo.cfiIsBr && alu.io.cmp_out)
-  brInfo.cfiIdx.bits  := io.req.bits.uop.idx
+  brInfo.cfiIdx.bits  := io.req.bits.uop.pcLow(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes))
   brInfo.cfiIsB       := io.req.bits.uop.isB
   brInfo.cfiIsBr      := io.req.bits.uop.isBr
   brInfo.cfiIsJirl    := io.req.bits.uop.isJirl
 
-  io.resp.valid                := io.req.valid
-  io.resp.bits.uop             := io.req.bits.uop
-  io.resp.bits.uop.debug.wdata := alu.io.out
-  io.resp.bits.data            := alu.io.out
-  io.brinfo                    := brInfo
+  io.resp.valid     := io.req.valid
+  io.resp.bits.uop  := io.req.bits.uop
+  io.resp.bits.data := alu.io.out
+  io.brInfo         := brInfo
   assert(io.resp.ready)
 }
 

@@ -410,8 +410,8 @@ object ICache {
     io.resp.valid := en && !io.flush
 
     io.readData.en  := io.req.fire || en
-    io.readData.set := Mux(io.req.fire, io.req.bits.set, io.holdRead.set)
-    io.readData.way := Mux(io.req.fire, io.req.bits.way, io.holdRead.way)
+    io.readData.set := Mux(io.req.ready, io.req.bits.set, io.holdRead.set)
+    io.readData.way := Mux(io.req.ready, io.req.bits.way, io.holdRead.way)
     io.resp.bits    := Mux(io.holdRead.cached, io.readData.data, io.holdRead.uncachedRead)
   }
 }

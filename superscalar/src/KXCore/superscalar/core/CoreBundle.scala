@@ -8,12 +8,12 @@ import KXCore.superscalar._
 /** MicroOp passing through the pipeline
   */
 class MicroOp(implicit params: CoreParameters) extends Bundle {
-  import params.{commonParams, axiParams, frontendParams, backendParams}
+  import params.{fetchBytes, commonParams, axiParams, frontendParams, backendParams}
   import commonParams.{instWidth, dataWidth, vaddrWidth, paddrWidth}
   import frontendParams.{fetchWidth, icacheParams, ftqIdxWidth}
   import backendParams.{lregWidth, pregWidth, robIdxWidth}
 
-  val idx    = UInt(log2Ceil(fetchWidth).W)
+  val pcLow  = UInt(log2Ceil(fetchBytes).W)
   val inst   = UInt(instWidth.W)
   val iqType = UInt(IQType.getWidth.W) // which issue unit do we use?
   val fuType = UInt(FUType.getWidth.W) // which functional unit do we use?
@@ -52,17 +52,31 @@ class MicroOp(implicit params: CoreParameters) extends Bundle {
   val busy          = Bool() // need execute?
 
   val debug = new Bundle {
-    val pc         = UInt(vaddrWidth.W)
-    val inst       = UInt(instWidth.W)
-    val timer      = UInt(64.W)
+    val pc             = UInt(vaddrWidth.W)
+    val inst           = UInt(instWidth.W)
+    val is_TLBFILL     = Bool()
+    val TLBFILL_index  = UInt(5.W)
+    val is_CNTinst     = Bool()
+    val timer_64_value = UInt(64.W)
+    val wen            = Bool()
+    val wdest          = UInt(8.W)
+    val wdata          = UInt(dataWidth.W)
+    val csr_rstat      = Bool()
+    val csr_data       = UInt(32.W)
+
+    val eret          = Bool()
+    val cause         = UInt(32.W)
+    val exceptionPC   = UInt(32.W)
+    val exceptionInst = UInt(32.W)
+
     val store      = UInt(8.W)
     val storePaddr = UInt(paddrWidth.W)
     val storeVaddr = UInt(vaddrWidth.W)
     val storeData  = UInt(dataWidth.W)
-    val load       = UInt(8.W)
-    val loadPaddr  = UInt(paddrWidth.W)
-    val loadVaddr  = UInt(vaddrWidth.W)
-    val loadData   = UInt(dataWidth.W)
-    val wdata      = UInt(dataWidth.W)
+
+    val load      = UInt(8.W)
+    val loadPaddr = UInt(paddrWidth.W)
+    val loadVaddr = UInt(vaddrWidth.W)
+    val loadData  = UInt(dataWidth.W)
   }
 }

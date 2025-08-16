@@ -48,8 +48,6 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
 
   val icache = Module(new ICache.ICacheStorage()(commonParams, icacheParams, axiParams))
   val bpu    = Module(new BranchPredictor.BranchPredictorStorage)
-  val fb     = Module(new FetchBuffer)
-  val ftq    = Module(new FetchTargetQueue)
 
   val flush = Wire(new Bundle {
     val stage1 = Bool()
@@ -115,6 +113,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   bpuStage0to1.io.btbRead     <> bpu.io.btb
 
   icacheArb.io.in(0).valid      := true.B
+  icacheArb.io.in(0).bits.cacop := CACOP_HIT_READ.asUInt
   icacheArb.io.in(0).bits.vaddr := s0_fetchPC
 
   icacheCacopReg.io.in <> io.icacheReq
@@ -194,18 +193,20 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheStage1to2.io.flush   := flush.stage2
   pipeStage1to2.io.flush.get := flush.stage2
 
+  icacheStage1to2.io.readData <> icache.io.dataPort.read
+
   icacheStage1.io.axi       <> io.axi
   icacheStage1.io.metaWrite <> icache.io.metaPort.write
   icacheStage1.io.dataWrite <> icache.io.dataPort.write
 
-  icacheStage1.io.req.valid       := pipeStage0to1.io.out.valid && icacheStage0to1.io.req.valid
+  icacheStage1.io.req.valid       := pipeStage0to1.io.out.valid && icacheStage0to1.io.resp.valid
   icacheStage1.io.req.bits.vaddr  := s1_fetchPC
   icacheStage1.io.req.bits.cacop  := s1_cacop
   icacheStage1.io.req.bits.cached := s1_cached
   icacheStage1.io.req.bits.paddr  := s1_paddr
   icacheStage1.io.req.bits.meta   := icacheStage0to1.io.resp.bits
 
-  bpuStage1.io.req.valid            := pipeStage0to1.io.out.valid && bpuStage0to1.io.req.valid
+  bpuStage1.io.req.valid            := pipeStage0to1.io.out.valid && bpuStage0to1.io.resp.valid
   bpuStage1.io.req.bits.bim         := bpuStage0to1.io.resp.bits.bim
   bpuStage1.io.req.bits.btb.fetchPC := s1_fetchPC
   bpuStage1.io.req.bits.btb.meta    := bpuStage0to1.io.resp.bits.btb.meta
@@ -219,11 +220,14 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
       (s1_bpuResp.pred(i).isBr && s1_bpuResp.pred(i).taken))
   }
   stage1Redirect.valid := bpuStage1.io.resp.valid
-  stage1Redirect := Mux(
+  stage1Redirect.bits := Mux(
     s1_redirects.reduce(_ || _),
     s1_bpuResp.pred(PriorityEncoder(s1_redirects)).target.bits,
     nextFetch(s1_fetchPC),
   )
+
+  icacheStage1.io.resp.ready := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
+  bpuStage1.io.resp.ready    := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
 
   pipeStage1to2.io.in.valid               := s1_fire
   pipeStage1to2.io.in.bits.fetchPC        := s1_fetchPC
@@ -260,6 +264,8 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
     inst === Instruction.JIRL.inst && inst(4, 0) === 0.U && inst(9, 5) === 1.U && inst(25, 10) === 0.U
   }
 
+  val fb     = Module(new FetchBuffer)
+  val ftq    = Module(new FetchTargetQueue)
   val ras    = Module(new RAS)
   val rasIdx = RegInit(0.U(log2Ceil(rasNum).W))
 
@@ -287,7 +293,19 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   pipeStage1to2.io.out.ready    := s2_fire
   icacheStage1to2.io.resp.ready := s2_fire
 
-  ras.io.read.idx := WrapDec(rasIdx, rasNum)
+  fb.io.flush := flush.stage2
+
+  ras.io.read.idx    := WrapDec(rasIdx, rasNum)
+  ras.io.write.valid := s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)
+  ras.io.write.idx   := rasIdx
+  ras.io.write.addr  := s2_pcs(s2_cfiIdx +& 1.U)
+  rasIdx := MuxCase(
+    rasIdx,
+    Seq(
+      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_retMask(s2_cfiIdx))  -> WrapDec(rasIdx, rasNum),
+      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)) -> WrapInc(rasIdx, rasNum),
+    ),
+  )
 
   s2_fetchBundle.pc  := s2_fetchPC
   s2_fetchBundle.npc := Mux(stage2Redirect.valid, stage2Redirect.bits, s2_stage1Redirect)
@@ -324,17 +342,6 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
     ),
   )
 
-  ras.io.write.valid := s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)
-  ras.io.write.idx   := rasIdx
-  ras.io.write.addr  := s2_pcs(s2_cfiIdx +& 1.U)
-  rasIdx := MuxCase(
-    rasIdx,
-    Seq(
-      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_retMask(s2_cfiIdx))  -> WrapDec(rasIdx, rasNum),
-      (s2_fire && !s2_exception.valid && s2_fetchBundle.cfiIdx.valid && s2_callMask(s2_cfiIdx)) -> WrapInc(rasIdx, rasNum),
-    ),
-  )
-
   fb.io.enq.valid  := s2_fire
   fb.io.enq.bits   := s2_fetchBundle
   ftq.io.enq.valid := s2_fire
@@ -342,6 +349,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
 
   // to bankend
   icache.io.clear            := io.icacheClear
+  bpu.io.update              := ftq.io.bpuUpdate
   io.fetchPacket             <> fb.io.deq
   ftq.io.deq                 := io.commit
   ftq.io.redirect.valid      := io.redirect.valid

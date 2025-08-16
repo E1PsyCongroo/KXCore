@@ -86,7 +86,7 @@ object BIM {
       metas.write(updateSet, updateWdata, updateWmask)
     }
 
-    io.read.data := Mux(io.read.set === updateSet, bypass, metas.read(io.read.set, io.read.en))
+    io.read.data.bims := metas.read(io.read.set, io.read.en)
   }
 
   class BIMStage0to1(implicit params: CoreParameters) extends Module {
@@ -114,8 +114,8 @@ object BIM {
     io.resp.valid := en && !io.flush
 
     io.metaRead.en    := io.req.fire || en
-    io.metaRead.set   := getSet(Mux(io.req.fire, io.req.bits, io.holdRead))
-    io.resp.bits.bims := io.metaRead.data
+    io.metaRead.set   := getSet(Mux(io.req.ready, io.req.bits, io.holdRead))
+    io.resp.bits.bims := io.metaRead.data.bims
   }
 
   class BIMStage1(implicit params: CoreParameters) extends Module {

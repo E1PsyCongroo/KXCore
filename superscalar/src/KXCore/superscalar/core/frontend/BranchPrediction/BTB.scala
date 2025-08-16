@@ -107,8 +107,8 @@ object BTB {
     btbs.foreach(btb => loadMemoryFromFileInline(btb, entryInitFile, MemoryLoadFileType.Binary))
     val ebtbs = SyncReadMem(extendedNSets, UInt(vaddrWidth.W))
 
-    io.read.meta := VecInit(metas.map(_.read(io.read.set, io.read.en).asTypeOf(new BTBMeta)))
-    io.read.btb  := VecInit(btbs.map(_.read(io.read.set, io.read.en).asTypeOf(new BTBEntry)))
+    io.read.meta := VecInit(metas.map(meta => VecInit(meta.read(io.read.set, io.read.en).map(_.asTypeOf(new BTBMeta)))))
+    io.read.btb  := VecInit(btbs.map(btb => VecInit(btb.read(io.read.set, io.read.en).map(_.asTypeOf(new BTBEntry)))))
     io.read.ebtb := ebtbs.read(io.read.set, io.read.en)
 
     val updateSet = getSet(io.update.fetchPC)
@@ -121,7 +121,7 @@ object BTB {
       (params.fetchAlign(io.update.fetchPC) + (io.update.cfiIdx.bits << log2Ceil(instBytes))).asSInt
     val offsetIsExtended = (newOffset > maxOffset || newOffset < minOffset)
     val updateBtbData    = Wire(new BTBEntry)
-    updateBtbData.offset   := newOffset
+    updateBtbData.offset   := newOffset.asUInt
     updateBtbData.extended := offsetIsExtended
     val updateBtbMask = UIntToOH(io.update.cfiIdx.valid) & Fill(fetchWidth, io.update.cfiIdx.valid)
 
@@ -133,7 +133,7 @@ object BTB {
     val updateMetaMask = updateBtbMask | io.update.brMask
 
     for (w <- 0 until nWays) {
-      when(io.update.valid && updateWay === w.U) {
+      when(io.update.valid && updateWay === w.U && !(io.read.en && io.read.set === updateSet)) {
         btbs(w).write(
           updateSet,
           VecInit.fill(fetchWidth)(updateBtbData.asUInt),
@@ -146,7 +146,7 @@ object BTB {
         )
       }
     }
-    when(io.update.valid && updateBtbMask =/= 0.U && offsetIsExtended) {
+    when(io.update.valid && updateBtbMask =/= 0.U && !(io.read.en && io.read.set === updateSet) && offsetIsExtended) {
       ebtbs.write(updateSet, io.update.target)
     }
 
@@ -191,7 +191,7 @@ object BTB {
     io.resp.valid := en && !io.flush
 
     io.infoRead.en    := io.req.fire || en
-    io.infoRead.set   := getSet(Mux(io.req.fire, io.req.bits, io.holdRead))
+    io.infoRead.set   := getSet(Mux(io.req.ready, io.req.bits, io.holdRead))
     io.resp.bits.meta := io.infoRead.meta
     io.resp.bits.btb  := io.infoRead.btb
     io.resp.bits.ebtb := io.infoRead.ebtb

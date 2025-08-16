@@ -148,6 +148,40 @@ object EXUOPControlField extends DecodeField[Instruction, UInt] {
   }
 }
 
+object LSUOPControlField extends DecodeField[Instruction, UInt] {
+  def name             = "lsu op control field"
+  def chiselType: UInt = UInt(LSUType.getWidth.W)
+  def genTable(op: Instruction): BitPat = {
+    op match {
+      case LD_B  => BitPat(LSUType.LSU_LDB.asUInt)
+      case LD_H  => BitPat(LSUType.LSU_LDH.asUInt)
+      case LD_W  => BitPat(LSUType.LSU_LDW.asUInt)
+      case ST_B  => BitPat(LSUType.LSU_STB.asUInt)
+      case ST_H  => BitPat(LSUType.LSU_STH.asUInt)
+      case ST_W  => BitPat(LSUType.LSU_STW.asUInt)
+      case LD_BU => BitPat(LSUType.LSU_LDBU.asUInt)
+      case LD_HU => BitPat(LSUType.LSU_LDHU.asUInt)
+      case _     => dc
+    }
+  }
+}
+
+object CSROPControlField extends DecodeField[Instruction, UInt] {
+  def name             = "csr op control field"
+  def chiselType: UInt = UInt(CSRType.getWidth.W)
+  def genTable(op: Instruction): BitPat = {
+    op match {
+      case CSRRD                                                               => BitPat(CSRType.RD.asUInt)
+      case CSRWR                                                               => BitPat(CSRType.RW.asUInt)
+      case CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3                       => BitPat(CSRType.XCHG.asUInt)
+      case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(CSRType.RDCNTID.asUInt)
+      case RDCNTVH_W                                                           => BitPat(CSRType.RDCNTVH.asUInt)
+      case RDCNTVL_W                                                           => BitPat(CSRType.RDCNTVL.asUInt)
+      case _                                                                   => dc
+    }
+  }
+}
+
 object RS1From extends ChiselEnum {
   val rs1None   = Value
   val rs1FromRj = Value
@@ -258,40 +292,6 @@ object BusyControlField extends DecodeField[Instruction, Bool] {
     op match {
       case ERTN => BitPat.N(1)
       case _    => BitPat.Y(1)
-    }
-  }
-}
-
-object LSUOPControlField extends DecodeField[Instruction, UInt] {
-  def name             = "lsu op control field"
-  def chiselType: UInt = UInt(LSUType.getWidth.W)
-  def genTable(op: Instruction): BitPat = {
-    op match {
-      case LD_B  => BitPat(LSUType.LSU_LDB.asUInt)
-      case LD_H  => BitPat(LSUType.LSU_LDH.asUInt)
-      case LD_W  => BitPat(LSUType.LSU_LDW.asUInt)
-      case ST_B  => BitPat(LSUType.LSU_STB.asUInt)
-      case ST_H  => BitPat(LSUType.LSU_STH.asUInt)
-      case ST_W  => BitPat(LSUType.LSU_STW.asUInt)
-      case LD_BU => BitPat(LSUType.LSU_LDBU.asUInt)
-      case LD_HU => BitPat(LSUType.LSU_LDHU.asUInt)
-      case _     => dc
-    }
-  }
-}
-
-object CSROPControlField extends DecodeField[Instruction, UInt] {
-  def name             = "csr op control field"
-  def chiselType: UInt = UInt(CSRType.getWidth.W)
-  def genTable(op: Instruction): BitPat = {
-    op match {
-      case CSRRD                                                               => BitPat(CSRType.RD.asUInt)
-      case CSRWR                                                               => BitPat(CSRType.RW.asUInt)
-      case CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3                       => BitPat(CSRType.XCHG.asUInt)
-      case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(CSRType.RDCNTID.asUInt)
-      case RDCNTVH_W                                                           => BitPat(CSRType.RDCNTVH.asUInt)
-      case RDCNTVL_W                                                           => BitPat(CSRType.RDCNTVL.asUInt)
-      case _                                                                   => dc
     }
   }
 }

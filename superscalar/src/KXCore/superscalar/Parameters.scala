@@ -86,7 +86,7 @@ case class BackendParameters(
   def memIQParams = issueParams(0)
   def unqIQParams = issueParams(1)
   def intIQParams = issueParams(2)
-  val wbPortNum   = issueParams.map(_.issueWidth).sum + 2
+  val wbPortNum   = issueParams.map(_.issueWidth).sum + 1
 }
 
 case class CoreParameters(

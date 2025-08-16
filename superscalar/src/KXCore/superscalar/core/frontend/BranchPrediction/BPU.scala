@@ -243,6 +243,8 @@ object BranchPredictor {
 
     bim.io.req.valid := io.req.valid
     btb.io.req.valid := io.req.valid
+    bim.io.req.bits  := io.req.bits.bim
+    btb.io.req.bits  := io.req.bits.btb
     io.req.ready     := bim.io.req.ready && btb.io.req.ready
 
     io.resp.valid     := bim.io.resp.valid && btb.io.resp.valid

@@ -52,12 +52,8 @@ class Core(implicit params: CoreParameters) extends Module {
   tlb.io.mode.matd := csr.io.tlb.matd
 
   tlb.io.transReq0 := frontend.io.itlbReq
-  // tlb.io.transReq0.asid := csr.io.tlb.asid
-  // tlb.io.transReq0.plv  := csr.io.priv
   tlb.io.transReq1 := backend.io.dtlbReq
-  // tlb.io.transReq0.asid := csr.io.tlb.asid
-  // tlb.io.transReq0.plv  := csr.io.priv
-  tlb.io.cmd_in := DontCare
+  tlb.io.cmd_in    := 0.U.asTypeOf(tlb.io.cmd_in)
 
   csr.io.raddr                := backend.io.csr_access.raddr
   backend.io.csr_access.rdata := csr.io.rdata
@@ -71,7 +67,7 @@ class Core(implicit params: CoreParameters) extends Module {
   backend.io.csr_access.cntvh     := csr.io.cntvh
   backend.io.csr_access.cntvl     := csr.io.cntvl
 
-  csr.io.pc                    := backend.io.csr_access.pc
+  csr.io.epc                   := backend.io.csr_access.epc
   csr.io.ecode                 := backend.io.csr_access.ecode
   csr.io.ecode_sub             := backend.io.csr_access.ecode_sub
   csr.io.badv                  := backend.io.csr_access.badv
@@ -85,22 +81,23 @@ class Core(implicit params: CoreParameters) extends Module {
 
   AXIInterconnect(axiParams, Seq(backend.io.axi, frontend.io.axi), Seq(io.axi), Seq(Seq(AddressSet(0, -1))), Seq(false))
 
+  frontend.io.icacheClear       := false.B
   frontend.io.icacheReq.valid   := false.B
   frontend.io.icacheReq.bits    := DontCare
   frontend.io.itlbResp          := tlb.io.transResp0
   frontend.io.fetchPacket.ready := backend.io.fetchPacket.ready
-  frontend.io.getPC(0).ftqIdx   := backend.io.getPC(0).ftqIdx
-  frontend.io.getPC(1).ftqIdx   := backend.io.getPC(1).ftqIdx
-  frontend.io.getPC(2).ftqIdx   := backend.io.getPC(2).ftqIdx
-  frontend.io.commit.valid      := backend.io.commit.valid
-  frontend.io.commit.bits       := backend.io.commit.bits
+  frontend.io.ftqReqs(0)        := backend.io.ftqReqs(0)
+  frontend.io.ftqReqs(1)        := backend.io.ftqReqs(1)
+  frontend.io.ftqReqs(2)        := backend.io.ftqReqs(2)
+  frontend.io.commit            := backend.io.commit
+  frontend.io.redirect          := backend.io.redirect
 
   backend.io.dtlbResp          := tlb.io.transResp1
   backend.io.fetchPacket.valid := frontend.io.fetchPacket.valid
   backend.io.fetchPacket.bits  := frontend.io.fetchPacket.bits
-  backend.io.getPC(0).info     := frontend.io.getPC(0).info
-  backend.io.getPC(1).info     := frontend.io.getPC(1).info
-  backend.io.getPC(2).info     := frontend.io.getPC(2).info
+  backend.io.ftqResps(0)       := frontend.io.ftqResps(0)
+  backend.io.ftqResps(1)       := frontend.io.ftqResps(1)
+  backend.io.ftqResps(2)       := frontend.io.ftqResps(2)
 
   io.ws_valid := false.B
   io.rf_rdata := 0.U
@@ -117,37 +114,33 @@ class Core(implicit params: CoreParameters) extends Module {
     val difftestStoreEvent  = Module(new DifftestStoreEvent)
     val difftestLoadEvent   = Module(new DifftestLoadEvent)
 
-    val commit_idx = OHToUInt(VecInit(backend.io.debug.commit_uops.map(_.valid)).asUInt)
-    difftestInstrCommit.io.clock         := clock.asBool
-    difftestInstrCommit.io.coreid        := 0.U
-    difftestInstrCommit.io.index         := 0.U
-    difftestInstrCommit.io.valid         := RegNext(backend.io.commit.valid && !backend.io.csr_access.excp_en, 0.U)
-    difftestInstrCommit.io.pc            := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.pc, 0.U)
-    difftestInstrCommit.io.instr         := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.inst, 0.U)
-    difftestInstrCommit.io.skip          := RegNext(false.B, false.B)
-    difftestInstrCommit.io.is_TLBFILL    := RegNext(false.B, false.B)
-    difftestInstrCommit.io.TLBFILL_index := RegNext(false.B, false.B)
-    difftestInstrCommit.io.is_CNTinst := RegNext(
-      Seq(RDCNTID_W_0, RDCNTID_W_1, RDCNTID_W_2, RDCNTID_W_3, RDCNTID_W_4, RDCNTVL_W, RDCNTVH_W)
-        .map(_.inst === backend.io.debug.commit_uops(commit_idx).bits.inst)
-        .reduce(_ || _),
-      false.B,
-    )
-    difftestInstrCommit.io.timer_64_value := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.timer, 0.U)
-    difftestInstrCommit.io.wen            := RegNext(backend.io.debug.commit_uops(commit_idx).bits.ldst =/= 0.U, 0.U)
-    difftestInstrCommit.io.wdest          := RegNext(backend.io.debug.commit_uops(commit_idx).bits.ldst, 0.U)
-    difftestInstrCommit.io.wdata          := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.wdata, 0.U)
-    difftestInstrCommit.io.csr_rstat      := RegNext(false.B, false.B)
-    difftestInstrCommit.io.csr_data       := RegNext(0.U, 0.U)
+    val commit_uop = PriorityMux(backend.io.debug.rob_commit.valids, backend.io.debug.rob_commit.uop)
+    difftestInstrCommit.io.clock          := clock.asBool
+    difftestInstrCommit.io.coreid         := 0.U
+    difftestInstrCommit.io.index          := 0.U
+    difftestInstrCommit.io.valid          := RegNext(backend.io.commit.valid, 0.U)
+    difftestInstrCommit.io.pc             := RegNext(commit_uop.debug.pc, 0.U)
+    difftestInstrCommit.io.instr          := RegNext(commit_uop.debug.inst, 0.U)
+    difftestInstrCommit.io.skip           := RegNext(false.B, false.B)
+    difftestInstrCommit.io.is_TLBFILL     := RegNext(commit_uop.debug.is_TLBFILL, false.B)
+    difftestInstrCommit.io.TLBFILL_index  := RegNext(commit_uop.debug.TLBFILL_index, false.B)
+    difftestInstrCommit.io.is_CNTinst     := RegNext(commit_uop.debug.is_CNTinst, false.B)
+    difftestInstrCommit.io.timer_64_value := RegNext(commit_uop.debug.timer_64_value, 0.U)
+    difftestInstrCommit.io.wen            := RegNext(commit_uop.debug.wen, 0.U)
+    difftestInstrCommit.io.wdest          := RegNext(commit_uop.debug.wdest, 0.U)
+    difftestInstrCommit.io.wdata          := RegNext(commit_uop.debug.wdata, 0.U)
+    difftestInstrCommit.io.csr_rstat      := RegNext(commit_uop.debug.csr_rstat, false.B)
+    difftestInstrCommit.io.csr_data       := RegNext(commit_uop.debug.csr_data, 0.U)
 
+    val exception = backend.io.debug.rob_exception
     difftestExcpEvent.io.clock         := clock.asBool
     difftestExcpEvent.io.coreid        := 0.U
-    difftestExcpEvent.io.excp_valid    := RegNext(backend.io.csr_access.excp_en, 0.U)
-    difftestExcpEvent.io.eret          := RegNext(backend.io.csr_access.eret_en, 0.U)
+    difftestExcpEvent.io.excp_valid    := RegNext(exception.valid, 0.U)
+    difftestExcpEvent.io.eret          := RegNext(csr.io.eret_en, 0.U)
     difftestExcpEvent.io.intrNo        := csr.io.debug.estat(12, 2)
-    difftestExcpEvent.io.cause         := RegNext(ECODE.getEcode(backend.io.csr_access.ecode), 0.U)
-    difftestExcpEvent.io.exceptionPC   := RegNext(backend.io.csr_access.pc, 0.U)
-    difftestExcpEvent.io.exceptionInst := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.inst, 0.U)
+    difftestExcpEvent.io.cause         := RegNext(exception.ecode, 0.U)
+    difftestExcpEvent.io.exceptionPC   := RegNext(exception.debug.exceptionPC, 0.U)
+    difftestExcpEvent.io.exceptionInst := RegNext(exception.debug.exceptionInst, 0.U)
 
     difftestTrapEvent.io.clock    := clock.asBool
     difftestTrapEvent.io.coreid   := 0.U
@@ -160,17 +153,17 @@ class Core(implicit params: CoreParameters) extends Module {
     difftestStoreEvent.io.clock      := clock.asBool
     difftestStoreEvent.io.coreid     := 0.U
     difftestStoreEvent.io.index      := 0.U
-    difftestStoreEvent.io.valid      := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.store & Fill(8, backend.io.commit.valid), 0.U)
-    difftestStoreEvent.io.storePAddr := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.storePaddr, 0.U)
-    difftestStoreEvent.io.storeVAddr := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.storeVaddr, 0.U)
-    difftestStoreEvent.io.storeData  := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.storeData, 0.U)
+    difftestStoreEvent.io.valid      := RegNext(commit_uop.debug.store & Fill(8, backend.io.commit.valid), 0.U)
+    difftestStoreEvent.io.storePAddr := RegNext(commit_uop.debug.storePaddr, 0.U)
+    difftestStoreEvent.io.storeVAddr := RegNext(commit_uop.debug.storeVaddr, 0.U)
+    difftestStoreEvent.io.storeData  := RegNext(commit_uop.debug.storeData, 0.U)
 
     difftestLoadEvent.io.clock  := clock.asBool
     difftestLoadEvent.io.coreid := 0.U
     difftestLoadEvent.io.index  := 0.U
-    difftestLoadEvent.io.valid  := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.load & Fill(8, backend.io.commit.valid), 0.U)
-    difftestLoadEvent.io.paddr  := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.loadVaddr, 0.U)
-    difftestLoadEvent.io.vaddr  := RegNext(backend.io.debug.commit_uops(commit_idx).bits.debug.loadPaddr, 0.U)
+    difftestLoadEvent.io.valid  := RegNext(commit_uop.debug.load & Fill(8, backend.io.commit.valid), 0.U)
+    difftestLoadEvent.io.paddr  := RegNext(commit_uop.debug.loadVaddr, 0.U)
+    difftestLoadEvent.io.vaddr  := RegNext(commit_uop.debug.loadPaddr, 0.U)
 
     difftestGRegState.io.clock  := clock.asBool
     difftestGRegState.io.coreid := 0.U

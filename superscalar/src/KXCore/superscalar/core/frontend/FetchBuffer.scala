@@ -65,10 +65,10 @@ class FetchBuffer(implicit params: CoreParameters) extends Module {
 
   for (i <- 0 until fetchWidth) {
     val pc = io.enq.bits.pcs(i)
-    in_uops(i)      := DontCare
-    in_mask(i)      := io.enq.valid && io.enq.bits.mask(i)
-    in_uops(i).idx  := i.U
-    in_uops(i).inst := io.enq.bits.insts(i)
+    in_uops(i)       := DontCare
+    in_mask(i)       := io.enq.valid && io.enq.bits.mask(i)
+    in_uops(i).pcLow := pc(log2Ceil(fetchWidth) - 1, 0)
+    in_uops(i).inst  := io.enq.bits.insts(i)
 
     in_uops(i).ftqIdx := io.enq.bits.ftqIdx
     in_uops(i).isBr   := io.enq.bits.brMask(i)

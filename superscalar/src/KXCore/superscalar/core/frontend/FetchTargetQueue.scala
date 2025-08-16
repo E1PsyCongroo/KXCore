@@ -93,6 +93,8 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     ram(io.redirect.idx) := redirect_new_entry
   }
 
+  io.bpuUpdate       := DontCare
+  io.bpuUpdate.valid := false.B
   when(bpu_ptr =/= deq_ptr) {
     bpu_ptr := WrapInc(bpu_ptr, ftqNum)
 
