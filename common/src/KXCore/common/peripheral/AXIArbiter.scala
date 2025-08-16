@@ -109,62 +109,34 @@ object AXIInterconnect {
   }
 }
 
-// object AXIArbiter {
-//   type Policy = (Int, UInt, Bool) => UInt
+class AXIArbiter(params: AXIBundleParameters, ids: Seq[Int]) extends Module {
+  private val inNum = ids.length
 
-//   val lowestIndexFirst: Policy  = (width, valids, select) => ~(scanLeftOr(valids) << 1)(width - 1, 0)
-//   val highestIndexFirst: Policy = (width, valids, select) => ~((scanRightOr(valids) >> 1).pad(width))
+  val io = IO(new Bundle {
+    val in  = Vec(inNum, Flipped(AXIBundle(params)))
+    val out = AXIBundle(params)
+  })
 
-//   def apply[T <: Data](policy: Policy)(sink: IrrevocableIO[T], sources: IrrevocableIO[T]*): Unit = {
-//     if (sources.isEmpty) {
-//       sink.valid := false.B
-//     } else {
-//       returnWinner(policy)(sink, sources: _*)
-//     }
-//   }
+  val arAribter = Module(new Arbiter(new AXIBundleAR(params), inNum))
+  val awAribter = Module(new Arbiter(new AXIBundleAW(params), inNum))
+  val wAribter  = Module(new Arbiter(new AXIBundleW(params), inNum))
 
-//   def returnWinner[T <: Data](policy: Policy)(sink: IrrevocableIO[T], sources: IrrevocableIO[T]*) = {
-//     require(!sources.isEmpty)
+  for (i <- 0 until inNum) {
+    arAribter.io.in(i) <> io.in(i).ar
+    awAribter.io.in(i) <> io.in(i).aw
+    wAribter.io.in(i)  <> io.in(i).w
+    io.in(i).r :<= io.out.r
+    io.in(i).b :<= io.out.b
+  }
+  io.out.ar <> arAribter.io.out
+  io.out.aw <> awAribter.io.out
+  io.out.w  <> wAribter.io.out
 
-//     // The arbiter is irrevocable; when !idle, repeat last request
-//     val idle = RegInit(true.B)
+  io.out.r.ready := io.in zip ids map { case (in, id) =>
+    in.r.ready && in.r.bits.id === id.U
+  } reduce (_ || _)
 
-//     // Who wants access to the sink?
-//     val valids   = sources.map(_.valid)
-//     val anyValid = valids.reduce(_ || _)
-//     // Arbitrate amongst the requests
-//     val readys = VecInit(policy(valids.length, Cat(valids.reverse), idle).asBools)
-//     // Which request wins arbitration?
-//     val winner = VecInit((readys.zip(valids)).map { case (r, v) => r && v })
-
-//     // Confirm the policy works properly
-//     require(readys.size == valids.size)
-//     // Never two winners
-//     val prefixOR = winner.scanLeft(false.B)(_ || _).init
-//     assert((prefixOR.zip(winner)).map { case (p, w) => !p || !w }.reduce { _ && _ })
-//     // If there was any request, there is a winner
-//     assert(!anyValid || winner.reduce(_ || _))
-
-//     // The one-hot source granted access in the previous cycle
-//     val state    = RegInit(VecInit.fill(sources.size)(false.B))
-//     val muxState = Mux(idle, winner, state)
-//     state := muxState
-
-//     // Determine when we go idle
-//     idle := Mux(sink.fire, true.B, Mux(anyValid, false.B, idle))
-
-//     if (sources.size > 1) {
-//       // 没有发出请求的 source 可以置位 ready，使用 readys 可以缩短路径，降低延迟
-//       val allowed = Mux(idle, readys, state)
-//       (sources.zip(allowed)).foreach { case (s, r) =>
-//         s.ready := sink.ready && r
-//       }
-//     } else {
-//       sources(0).ready := sink.ready
-//     }
-
-//     sink.valid := Mux(idle, anyValid, Mux1H(state, valids))
-//     sink.bits :<= Mux1H(muxState, sources.map(_.bits))
-//     muxState
-//   }
-// }
+  io.out.b.ready := io.in zip ids map { case (in, id) =>
+    in.b.ready && in.b.bits.id === id.U
+  } reduce (_ || _)
+}

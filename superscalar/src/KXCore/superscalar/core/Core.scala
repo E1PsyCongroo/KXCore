@@ -80,7 +80,10 @@ class Core(implicit params: CoreParameters) extends Module {
   backend.io.csr_access.intr_pending := csr.io.interrupt.pending
   csr.io.interrupt.externel_sample   := io.intrpt
 
-  AXIInterconnect(axiParams, Seq(backend.io.axi, frontend.io.axi), Seq(io.axi), Seq(Seq(AddressSet(0, -1))), Seq(false))
+  val axiAribter = Module(new AXIArbiter(axiParams, Seq(params.backendParams.dcacheParams.id, params.frontendParams.icacheParams.id)))
+  axiAribter.io.in(0) <> backend.io.axi
+  axiAribter.io.in(1) <> frontend.io.axi
+  axiAribter.io.out   <> io.axi
 
   frontend.io.icacheClear       := false.B
   frontend.io.icacheReq.valid   := false.B

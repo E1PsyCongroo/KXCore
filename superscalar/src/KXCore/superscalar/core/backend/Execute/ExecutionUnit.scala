@@ -221,15 +221,6 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
 
   io_axi.b.ready := (state === sWaitResp) || (state === sIgnoreResp)
 
-  // For Now
-  when(io_axi.r.fire) {
-    assert(
-      io_axi.r.bits.last.asBool && io_axi.r.bits.id === 1.U &&
-        io_axi.r.bits.resp === AXIParameters.RESP_OKAY,
-    )
-  }
-  when(io_axi.b.fire) { assert(io_axi.b.bits.id === 1.U && io_axi.b.bits.resp === AXIParameters.RESP_OKAY) }
-
   val io_mem_resp = IO(Output(Valid(new ExeUnitResp)))
   val io_mem_xcep = IO(Output(Valid(new MicroOp)))
 
