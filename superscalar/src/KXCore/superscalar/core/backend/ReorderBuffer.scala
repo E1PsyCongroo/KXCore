@@ -80,10 +80,9 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     val redirect  = Output(new RoBRedirectIO)
     val exception = Output(new RoBExceptionIO)
 
-    val intr_pending = Input(Bool())
-    val eentry       = Input(UInt(dataWidth.W))
-    val era          = Input(UInt(dataWidth.W))
-    val ertn         = Output(Bool())
+    val eentry = Input(UInt(dataWidth.W))
+    val era    = Input(UInt(dataWidth.W))
+    val ertn   = Output(Bool())
   })
 
   val rob_flush     = Wire(Bool())
@@ -244,8 +243,8 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     // -----------------------------------------------
     // Commit
 
-    can_commit(w)     := rob_val(rob_head) && !rob_bsy(rob_head) && !io.intr_pending
-    can_throw_xcep(w) := rob_val(rob_head) && (rob_exception(rob_head) || io.intr_pending)
+    can_commit(w)     := rob_val(rob_head) && !rob_bsy(rob_head)
+    can_throw_xcep(w) := rob_val(rob_head) && rob_exception(rob_head)
     can_redirect(w)   := can_commit(w) && rob_redirect(rob_head)
 
     io.commit.valids(w) := will_commit(w)
@@ -316,11 +315,10 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   )
   io.ertn := will_redirect && rob_redirect_info.isErtn && !will_throw_xcep
 
-  val ecode = Mux(io.intr_pending, ECODE.INT.asUInt, rob_xcep_info.ecode)
   io.exception.valid     := will_throw_xcep
   io.exception.epc       := redirect_uop_pc
-  io.exception.ecode     := ECODE.getEcode(ecode)
-  io.exception.ecode_sub := ECODE.getEsubCode(ecode)
+  io.exception.ecode     := ECODE.getEcode(rob_xcep_info.ecode)
+  io.exception.ecode_sub := ECODE.getEsubCode(rob_xcep_info.ecode)
   io.exception.badv      := rob_xcep_info.badv
 
   io.exception.debug.exceptionPC   := io.exception.epc

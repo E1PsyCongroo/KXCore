@@ -297,8 +297,9 @@ object BusyControlField extends DecodeField[Instruction, Bool] {
 }
 
 class DecoderIO(implicit params: CoreParameters) extends Bundle {
-  val req  = Input(Vec(params.backendParams.coreWidth, new MicroOp))
-  val resp = Output(Vec(params.backendParams.coreWidth, new MicroOp))
+  val req          = Input(Vec(params.backendParams.coreWidth, new MicroOp))
+  val resp         = Output(Vec(params.backendParams.coreWidth, new MicroOp))
+  val intr_pending = Input(Bool())
 }
 
 class Decoder(implicit params: CoreParameters) extends Module {
@@ -459,10 +460,12 @@ class Decoder(implicit params: CoreParameters) extends Module {
     uop.exuCmd        := decodeResult(EXUOPControlField)
     uop.csrCmd        := decodeResult(CSROPControlField)
     uop.lsuCmd        := decodeResult(LSUOPControlField)
-    uop.exception     := io.req(i).exception || ine || io.req(i).inst === SYSCALL.inst || io.req(i).inst === BREAK.inst
+    uop.exception := io.req(i).exception || ine || io.intr_pending ||
+      io.req(i).inst === SYSCALL.inst || io.req(i).inst === BREAK.inst
     uop.ecode := MuxCase(
       DontCare,
       Seq(
+        io.intr_pending                   -> ECODE.INT.asUInt,
         io.req(i).exception               -> io.req(i).ecode,
         ine                               -> ECODE.INE.asUInt,
         (io.req(i).inst === SYSCALL.inst) -> ECODE.SYS.asUInt,

@@ -96,6 +96,7 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   intIssUnit.io.fu_types := VecInit(aluExeUnits.map(_.io_fu_types))
 
   // decode & rename
+  decoder.io.intr_pending := io.csr_access.intr_pending
   val decData       = Wire(Decoupled(Vec(coreWidth, Valid(new MicroOp))))
   val decUopFire    = Wire(UInt(coreWidth.W))
   val decUopFireReg = RegInit(0.U(coreWidth.W))
@@ -330,7 +331,6 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   io.csr_access.ecode_sub := rob.io.exception.ecode_sub
   io.csr_access.badv      := rob.io.exception.badv
   io.csr_access.excp_en   := rob.io.exception.valid
-  rob.io.intr_pending     := io.csr_access.intr_pending
   rob.io.eentry           := io.csr_access.eentry
 
   io.csr_access.eret_en := rob.io.ertn
