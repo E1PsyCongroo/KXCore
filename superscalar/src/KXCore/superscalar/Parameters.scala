@@ -108,7 +108,10 @@ case class CoreParameters(
   def fetchIdx(addr: UInt): UInt = {
     addr >> log2Ceil(fetchBytes)
   }
-  def fetchAlign(addr: UInt) = addr & ~(fetchBytes - 1).U(commonParams.vaddrWidth.W)
+  def fetchAlign(addr: UInt) = addr &
+    (Fill(commonParams.vaddrWidth - log2Ceil(fetchBytes), 1.U) ##
+      Fill(log2Ceil(fetchBytes) - log2Ceil(commonParams.instBytes), 0.U) ##
+      Fill(log2Ceil(commonParams.instBytes), 1.U))
   def nextFetch(addr: UInt) = {
     fetchAlign(addr) + fetchBytes.U
   }

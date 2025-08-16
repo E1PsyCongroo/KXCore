@@ -287,7 +287,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   for (w <- 0 until coreWidth) {
     will_throw_xcep = will_throw_xcep || (can_throw_xcep(w) && !block_commit && !block_redirect)
     will_redirect = will_redirect || (can_redirect(w) && !block_commit && !block_redirect)
-    will_commit(w) := can_commit(w) && !block_commit
+    will_commit(w) := can_commit(w) && !can_throw_xcep(w) && !block_commit
 
     commit_count = Mux(will_commit(w), commit_count + 1.U, commit_count)
     block_commit = block_commit || (rob_head_vals(w) && (!can_commit(w) || can_throw_xcep(w) || can_redirect(w)))
