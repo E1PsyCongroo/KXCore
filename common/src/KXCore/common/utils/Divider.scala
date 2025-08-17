@@ -56,7 +56,7 @@ class BoothDivider(dwidth: Int) extends Divider(dwidth) {
         sIdle        -> Mux(io.in.fire, Mux(divZero, sDivZeroSend, sDiv), sIdle),
         sDiv         -> Mux(last, sSend, sDiv),
         sSend        -> Mux(io.out.fire, sIdle, sSend),
-        sDivZeroSend -> Mux(io.out.fire, sIdle, sSend),
+        sDivZeroSend -> Mux(io.out.fire, sIdle, sDivZeroSend),
       ),
     ),
   )
@@ -94,3 +94,12 @@ class BoothDivider(dwidth: Int) extends Divider(dwidth) {
   io.out.bits.quotient  := (Fill(dwidth, needNeg(0)) ^ result(dwidth - 1, 0)) + needNeg(0)
   io.out.bits.remainder := (Fill(dwidth, needNeg(1)) ^ result(dwidth * 2 - 1, dwidth)) + needNeg(1)
 }
+
+/*
+class VivadoIPDivider(dwidth: Int) extends Divider(dwidth) {
+  
+  require(dwidth == 32)
+
+  val sIdle ::
+}
+*/

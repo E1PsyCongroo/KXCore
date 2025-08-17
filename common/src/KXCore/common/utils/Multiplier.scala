@@ -311,3 +311,82 @@ class WallaceMultiplier(dwidth: Int, pipeDepth: Int) extends Multiplier(dwidth) 
   io.out.bits.result_lo := result(dwidth - 1, 0)
   io.out.bits.result_hi := result(dwidth * 2 - 1, dwidth)
 }
+
+class VivadoIPMultiplier(dwidth: Int, pipeDepth: Int) extends Multiplier(dwidth) {
+
+  // TODO: now only support this, modify in vivado?
+  require(dwidth == 32)
+  require(pipeDepth == 3)
+
+  val sIdle :: sMul :: sSend :: Nil = Enum(3)
+  val state = RegInit(sIdle)
+  val isIdle = state === sIdle
+  val isMul = state === sMul
+  val isSend = state === sSend
+
+  val latency = 3
+  val cycleCounter = RegInit(0.U(log2Ceil(latency + 1).W))
+  val last = (cycleCounter === (latency - 1).U)
+
+  state := Mux(
+    io.flush,
+    sIdle,
+    MuxLookup(state, sIdle)(
+      Seq(
+        sIdle -> Mux(io.in.fire, sMul, sIdle),
+        sMul  -> Mux(last, sSend, sMul),
+        sSend -> Mux(io.out.fire, sIdle, sSend),
+      ),
+    ),
+  )
+  cycleCounter := MuxCase(
+    0.U,
+    Seq(
+      io.in.fire -> 0.U,
+      isMul      -> (cycleCounter + 1.U),
+    ),
+  )
+
+  val multiplicand_signed = io.in.bits.signed(1)
+  val multiplier_signed = io.in.bits.signed(0)
+
+  val multiplicand_abs_comb = Mux(
+    multiplicand_signed && io.in.bits.multiplicand(dwidth - 1),
+    (~io.in.bits.multiplicand + 1.U),
+    io.in.bits.multiplicand
+  )
+
+  val multiplier_abs_comb = Mux(
+    multiplier_signed && io.in.bits.multiplier(dwidth - 1),
+    (~io.in.bits.multiplier + 1.U),
+    io.in.bits.multiplier
+  )
+
+  val multiplicand_abs = RegEnable(multiplicand_abs_comb, io.in.fire)
+  val multiplier_abs = RegEnable(multiplier_abs_comb, io.in.fire)
+
+  val result_negative_comb = (multiplicand_signed && io.in.bits.multiplicand(dwidth - 1)) ^ (multiplier_signed && io.in.bits.multiplier(dwidth - 1))
+  val result_negative = RegEnable(result_negative_comb, io.in.fire)
+
+  val multiplier = Module(new VivadoMultiplierIP(dwidth, pipeDepth))
+
+  multiplier.io.CLK := clock
+  multiplier.io.SCLR := reset.asBool || io.flush
+  multiplier.io.CE := true.B
+
+  multiplier.io.A := multiplicand_abs
+  multiplier.io.B := multiplier_abs
+
+  val result_data = multiplier.io.P
+  val final_result = Mux(
+    result_negative,
+    (~result_data + 1.U),
+    result_data
+  )
+
+  io.in.ready           := isIdle
+  io.out.valid          := isSend && !io.flush
+
+  io.out.bits.result_lo := final_result(dwidth - 1, 0)
+  io.out.bits.result_hi := final_result(dwidth * 2 - 1, dwidth)
+}

@@ -97,7 +97,9 @@ class MultiplyUnit(implicit params: CoreParameters) extends FunctionalUnit {
   import params.{commonParams, backendParams}
   import commonParams.{dataWidth}
 
+  // 手动切换是否使用 IP 核
   val multiplier = Module(new WallaceMultiplier(dataWidth, backendParams.mulPipeDepth))
+  // val multiplier = Module(new VivadoIPMultiplier(dataWidth, backendParams.mulPipeDepth))
 
   val uopReg = RegEnable(io.req.bits.uop, io.req.ready)
 
