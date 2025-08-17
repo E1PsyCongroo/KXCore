@@ -9,7 +9,6 @@ import KXCore.common.utils._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
 import KXCore.superscalar.core.frontend._
-import scala.annotation.varargs
 
 class BackEndIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, axiParams, frontendParams, backendParams}
@@ -27,6 +26,7 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
     val cacop = UInt(CACOPType.getWidth.W)
     val vaddr = UInt(vaddrWidth.W)
   })
+  val tlbCmd   = Output(new TLBCmdIO)
   val commit   = Valid(UInt(ftqIdxWidth.W))
   val redirect = Output(new RoBRedirectIO)
   val csr_access = new Bundle {
@@ -215,10 +215,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   unqExeUnit.io_csr_access.get.cntvh     := io.csr_access.cntvh
   unqExeUnit.io_csr_access.get.cntvl     := io.csr_access.cntvl
 
-  /* use memExeUnitWithCache
-  memExeUnit.io_dcache_flush.stage1 := flush
-  memExeUnit.io_dcache_flush.stage2 := flush
-   */
+  io.tlbCmd := unqExeUnit.io_tlb_cmd.get
+
   unqIssUnit.io.iss_uops(0) <> unqExeUnit.io_iss_uop
   intIssUnit.io.iss_uops zip aluExeUnits map { case (iss_uop, exu) => iss_uop <> exu.io_iss_uop }
 

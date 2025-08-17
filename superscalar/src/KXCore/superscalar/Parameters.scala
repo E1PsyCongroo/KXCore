@@ -1,10 +1,49 @@
 package KXCore.superscalar
 
+import scala.math._
 import chisel3._
 import chisel3.util._
-import scala.math._
-import KXCore.common.CommonParameters
-import KXCore.common.peripheral.{AXIBundleParameters, CacheParameters}
+import KXCore.common.peripheral.AXIBundleParameters
+
+case class CommonParameters(
+    dataWidth: Int = 32,
+    instWidth: Int = 32,
+    vaddrWidth: Int = 32,
+    paddrWidth: Int = 32,
+    pcReset: BigInt = 0x1c00_0000L,
+    debug: Boolean = true,
+) {
+  val dataBytes: Int  = dataWidth / 8
+  val instBytes: Int  = instWidth / 8
+  val vaddrBytes: Int = vaddrWidth / 8
+  val paddrBytes: Int = paddrWidth / 8
+  require(vaddrWidth == 32)
+  require(paddrWidth >= vaddrWidth)
+}
+
+case class CacheParameters(
+    id: Int = 0,
+    nSets: Int = 64,
+    nWays: Int = 4,
+    nBanks: Int = 1,
+    replacer: Option[String] = Some("random"),
+    fetchBytes: Int = 16,
+    singlePorted: Boolean = true,
+) {
+  val setWidth: Int   = log2Ceil(nSets)
+  val wayWidth: Int   = log2Ceil(nWays)
+  val blockBytes: Int = fetchBytes
+  val blockBits: Int  = blockBytes * 8
+  val blockWidth: Int = log2Ceil(blockBytes)
+  val bankBytes: Int  = blockBytes / nBanks
+  val bankBits: Int   = bankBytes * 8
+  val bankWidth: Int  = log2Ceil(bankBytes)
+  require(id >= 0 && id < 16)
+  require(setWidth + blockWidth <= 12)
+  require(isPow2(nSets) && isPow2(nWays))
+  require(wayWidth <= blockWidth, "Cacop Index Invalidate Need wayWidth <= blockWidth")
+  require(nBanks == 1 || nBanks == 2)
+}
 
 case class FAMicroBTBParameters(
     nWays: Int = 16,
@@ -92,6 +131,7 @@ case class BackendParameters(
 case class CoreParameters(
     debug: Boolean = true,
     difftest: Boolean = true,
+    tlbNum: Int = 32,
 )(
     implicit val commonParams: CommonParameters = CommonParameters(),
     implicit val axiParams: AXIBundleParameters = AXIBundleParameters(),

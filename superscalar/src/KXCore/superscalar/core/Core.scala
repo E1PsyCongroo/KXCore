@@ -40,34 +40,33 @@ class Core(implicit params: CoreParameters) extends Module {
   val io = IO(new CoreIO)
 
   val tlb      = Module(new TLB)
-  val csr      = Module(new CSR)
+  val csr      = Module(new CSRUnit)
   val frontend = Module(new FrontEnd)
   val backend  = Module(new BackEnd)
 
-  tlb.io.mode.da   := csr.io.tlb.da
-  tlb.io.mode.pg   := csr.io.tlb.pg
-  tlb.io.mode.dmw  := csr.io.tlb.dmw
-  tlb.io.mode.asid := csr.io.tlb.asid
-  tlb.io.mode.plv  := csr.io.priv
-  tlb.io.mode.matf := csr.io.tlb.matf
-  tlb.io.mode.matd := csr.io.tlb.matd
+  tlb.io.mode.crmd    := csr.io.crmd
+  tlb.io.mode.estat   := csr.io.estat
+  tlb.io.mode.asid    := csr.io.tlb.asid
+  tlb.io.mode.dmw     := csr.io.tlb.dmw
+  tlb.io.mode.tlbidx  := csr.io.tlb.tlbidx
+  tlb.io.mode.tlbehi  := csr.io.tlb.tlbehi
+  tlb.io.mode.tlbelo0 := csr.io.tlb.tlbelo0
+  tlb.io.mode.tlbelo1 := csr.io.tlb.tlbelo1
 
-  tlb.io.transReq0          := frontend.io.itlbReq
-  tlb.io.transReq1          := backend.io.dtlbReq
-  tlb.io.cmd_in.cmd         := 0.U.asTypeOf(tlb.io.cmd_in.cmd)
-  tlb.io.cmd_in.cmd.cmd     := TLBCmd.CMD_NONE.asUInt
-  tlb.io.cmd_in.estat_ecode := csr.io.ecode
-  tlb.io.cmd_in.inv_op      := DontCare
+  tlb.io.tlbCmd := backend.io.tlbCmd
+
+  tlb.io.transReq0 := frontend.io.itlbReq
+  tlb.io.transReq1 := backend.io.dtlbReq
 
   csr.io.raddr                := backend.io.csr_access.raddr
   backend.io.csr_access.rdata := csr.io.rdata
-
-  csr.io.tlb_cmd := tlb.io.cmd_out.cmd
 
   csr.io.we    := backend.io.csr_access.we
   csr.io.waddr := backend.io.csr_access.waddr
   csr.io.wdata := backend.io.csr_access.wdata
   csr.io.wmask := backend.io.csr_access.wmask
+
+  csr.io.tlbUpdate := tlb.io.tlbUpdate
 
   backend.io.csr_access.counterID := csr.io.counterID
   backend.io.csr_access.cntvh     := csr.io.cntvh
@@ -275,10 +274,10 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestGRegState.io.gpr_31 := backend.io.debug.regs(31)
 
       difftestCSRRegState.io.clock     := clock.asBool
-      difftestCSRRegState.io.coreid    := 0.U
+      difftestCSRRegState.io.coreid    := csr.io.debug.cpuid
       difftestCSRRegState.io.crmd      := csr.io.debug.crmd
       difftestCSRRegState.io.prmd      := csr.io.debug.prmd
-      difftestCSRRegState.io.euen      := 0.U
+      difftestCSRRegState.io.euen      := csr.io.debug.euen
       difftestCSRRegState.io.ecfg      := csr.io.debug.ecfg
       difftestCSRRegState.io.estat     := csr.io.debug.estat
       difftestCSRRegState.io.era       := csr.io.debug.era
@@ -289,8 +288,8 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestCSRRegState.io.tlbelo0   := csr.io.debug.tlbelo0
       difftestCSRRegState.io.tlbelo1   := csr.io.debug.tlbelo1
       difftestCSRRegState.io.asid      := csr.io.debug.asid
-      difftestCSRRegState.io.pgdl      := 0.U
-      difftestCSRRegState.io.pgdh      := 0.U
+      difftestCSRRegState.io.pgdl      := csr.io.debug.pgdl
+      difftestCSRRegState.io.pgdh      := csr.io.debug.pgdh
       difftestCSRRegState.io.save0     := csr.io.debug.saved0
       difftestCSRRegState.io.save1     := csr.io.debug.saved1
       difftestCSRRegState.io.save2     := csr.io.debug.saved2
@@ -298,8 +297,8 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestCSRRegState.io.tid       := csr.io.debug.tid
       difftestCSRRegState.io.tcfg      := csr.io.debug.tcfg
       difftestCSRRegState.io.tval      := csr.io.debug.tval
-      difftestCSRRegState.io.ticlr     := 0.U
-      difftestCSRRegState.io.llbctl    := 0.U
+      difftestCSRRegState.io.ticlr     := csr.io.debug.ticlr
+      difftestCSRRegState.io.llbctl    := csr.io.debug.llbctl
       difftestCSRRegState.io.tlbrentry := csr.io.debug.tlbrentry
       difftestCSRRegState.io.dmw0      := csr.io.debug.dmw0
       difftestCSRRegState.io.dmw1      := csr.io.debug.dmw1

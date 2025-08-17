@@ -15,12 +15,10 @@ object Elaborate extends App {
     "-default-layer-specialization=enable",
   )
 
-  implicit val commonParams: CommonParameters = CommonParameters()
-  implicit val cacheParams: CacheParameters   = CacheParameters()
   implicit val axiParams: AXIBundleParameters = AXIBundleParameters()
-  circt.stage.ChiselStage.emitSystemVerilogFile(
-    new ICache.ICacheStorage,
-    args,
-    firtoolOptions,
-  )
+  // circt.stage.ChiselStage.emitSystemVerilogFile(
+  //   new ICache.ICacheStorage,
+  //   args,
+  //   firtoolOptions,
+  // )
 }

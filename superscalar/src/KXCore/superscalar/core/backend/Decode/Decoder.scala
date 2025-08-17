@@ -22,6 +22,7 @@ object IQTypeControlField extends DecodeField[Instruction, UInt] {
       case BREAK | SYSCALL | ERTN                                              => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(IQType.IQT_UNQ.asUInt)
+      case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(IQType.IQT_UNQ.asUInt)
       case CPUCFG                                                              => BitPat(IQType.IQT_UNQ.asUInt)
       case _                                                                   => BitPat(IQType.IQT_INT.asUInt)
     }
@@ -38,6 +39,7 @@ object FUTypeControlField extends DecodeField[Instruction, UInt] {
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(FUType.FUT_CSR.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(FUType.FUT_CSR.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(FUType.FUT_CSR.asUInt)
+      case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(FUType.FUT_CSR.asUInt)
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU             => BitPat(FUType.FUT_MEM.asUInt)
       case MUL_W | MULH_W | MULH_WU                                            => BitPat(FUType.FUT_MUL.asUInt)
       case DIV_W | MOD_W | DIV_WU | MOD_WU                                     => BitPat(FUType.FUT_DIV.asUInt)
@@ -70,6 +72,7 @@ object IMMTypeControlField extends DecodeField[Instruction, UInt] {
       case ANDI | ORI | XORI                                             => BitPat(IMMType.IMM_12U.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat(IMMType.IMM_14U.asUInt)
       case SYSCALL | BREAK | IDLE                                        => BitPat(IMMType.IMM_15U.asUInt)
+      case CACOP | INVTLB                                                => BitPat(IMMType.IMM_15U.asUInt)
       case JIRL | BEQ | BNE | BLT | BGE | BLTU | BGEU                    => BitPat(IMMType.IMM_16.asUInt)
       case LU12I_W | PCADDU12I                                           => BitPat(IMMType.IMM_20.asUInt)
       case B | BL                                                        => BitPat(IMMType.IMM_26.asUInt)
@@ -155,6 +158,11 @@ object EXUOPControlField extends DecodeField[Instruction, UInt] {
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(EXUType.EXU_RDCNTID.asUInt)
       case RDCNTVL_W                                                           => BitPat(EXUType.EXU_RDCNTVL.asUInt)
       case RDCNTVH_W                                                           => BitPat(EXUType.EXU_RDCNTVH.asUInt)
+      case TLBSRCH                                                             => BitPat(EXUType.EXU_TLBSRCH.asUInt)
+      case TLBRD                                                               => BitPat(EXUType.EXU_TLBRD.asUInt)
+      case TLBWR                                                               => BitPat(EXUType.EXU_TLBWR.asUInt)
+      case TLBFILL                                                             => BitPat(EXUType.EXU_TLBFILL.asUInt)
+      case INVTLB                                                              => BitPat(EXUType.EXU_INVTLB.asUInt)
       case CPUCFG                                                              => BitPat(EXUType.EXU_CPUCFG.asUInt)
       case _                                                                   => dc
     }
@@ -173,8 +181,9 @@ object RS1ControlField extends DecodeField[Instruction, UInt] {
       case LU12I_W | PCADDU12I | B | BL                                        => BitPat(RS1From.rs1None.asUInt)
       case SYSCALL | BREAK | ERTN                                              => BitPat(RS1From.rs1None.asUInt)
       case CSRRD | CSRWR                                                       => BitPat(RS1From.rs1None.asUInt)
-      case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS1From.rs1None.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(RS1From.rs1None.asUInt)
+      case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS1From.rs1None.asUInt)
+      case TLBSRCH | TLBRD | TLBWR | TLBFILL                                   => BitPat(RS1From.rs1None.asUInt)
       case _                                                                   => BitPat(RS1From.rs1FromRj.asUInt)
     }
   }
@@ -197,8 +206,9 @@ object RS2ControlField extends DecodeField[Instruction, UInt] {
       case B | BL | JIRL                                                       => BitPat(RS2From.rs2None.asUInt)
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                                  => BitPat(RS2From.rs2None.asUInt)
       case SYSCALL | BREAK | ERTN | IDLE | CPUCFG                              => BitPat(RS2From.rs2None.asUInt)
-      case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS2From.rs2None.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(RS2From.rs2None.asUInt)
+      case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS2From.rs2None.asUInt)
+      case TLBSRCH | TLBRD | TLBWR | TLBFILL                                   => BitPat(RS2From.rs2None.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(RS2From.rs2FromRd.asUInt)
       case BEQ | BNE | BLT | BGE | BLTU | BGEU                                 => BitPat(RS2From.rs2FromRd.asUInt)
       case ST_B | ST_H | ST_W                                                  => BitPat(RS2From.rs2FromRd.asUInt)
@@ -246,8 +256,9 @@ object UniqControlField extends DecodeField[Instruction, Bool] {
       case ST_B | ST_H | ST_W                                    => BitPat.Y(1)
       case RDCNTVL_W | RDCNTVH_W                                 => BitPat.Y(1)
       case CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat.Y(1)
-      case ERTN                                                  => BitPat.Y(1)
-      case _                                                     => BitPat.N(1)
+      case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB            => BitPat.Y(1)
+      // case ERTN                                                  => BitPat.Y(1)
+      case _ => BitPat.N(1)
     }
   }
 }
@@ -385,7 +396,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
   )
 
   val NOP     = "b0000_001010_000000000000_00000_00000".U(instWidth.W)
-  val unImpls = Seq(PRELD, LL_W, SC_W, DBAR, IBAR, CACOP, TLBSRCH, TLBRD, TLBWR, TLBFILL, INVTLB, IDLE)
+  val unImpls = Seq(PRELD, LL_W, SC_W, DBAR, IBAR, CACOP, IDLE)
 
   for (i <- 0 until coreWidth) {
     val ine          = !possiblePatterns.map(_.inst === io.req(i).inst).reduce(_ || _)

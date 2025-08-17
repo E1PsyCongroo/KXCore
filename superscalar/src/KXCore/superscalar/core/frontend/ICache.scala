@@ -1,4 +1,4 @@
-package KXCore.common.peripheral
+package KXCore.superscalar.core.frontend
 
 import java.io._
 import chisel3._
@@ -11,35 +11,38 @@ import KXCore.common._
 import KXCore.common.peripheral._
 import KXCore.common.Privilege._
 import KXCore.common.Privilege.CACOPType._
+import KXCore.superscalar._
+import KXCore.superscalar.core._
+import KXCore.superscalar.core.backend._
 
 object ICache {
-  def getSet(vaddr: UInt)(implicit cacheParams: CacheParameters): UInt = {
-    vaddr(cacheParams.setWidth + cacheParams.blockWidth - 1, cacheParams.blockWidth)
+  def getSet(vaddr: UInt)(implicit params: CoreParameters): UInt = {
+    import params.frontendParams.icacheParams.{setWidth, blockWidth}
+    vaddr(setWidth + blockWidth - 1, blockWidth)
   }
 
-  def getTag(paddr: UInt)(implicit commonParams: CommonParameters, cacheParams: CacheParameters): UInt = {
-    paddr.head(commonParams.paddrWidth - cacheParams.setWidth - cacheParams.blockWidth)
+  def getTag(paddr: UInt)(implicit params: CoreParameters): UInt = {
+    import params.{commonParams, frontendParams}
+    import params.commonParams.{paddrWidth}
+    import frontendParams.icacheParams.{setWidth, blockWidth}
+    paddr.head(paddrWidth - setWidth - blockWidth)
   }
 
-  class ICacheMeta(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ) extends Bundle {
+  class ICacheMeta(implicit params: CoreParameters) extends Bundle {
+    import params.{commonParams, frontendParams}
+    import frontendParams.{icacheParams}
     import commonParams.{paddrWidth}
-    import cacheParams.{setWidth, blockWidth}
+    import icacheParams.{setWidth, blockWidth}
     private val tagWidth = paddrWidth - setWidth - blockWidth
 
     val valid = Bool()
     val tag   = UInt(tagWidth.W)
   }
 
-  def generateMetaTagHexFile(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ): String = {
-    import cacheParams.{nSets, nWays}
+  def generateMetaTagHexFile(implicit params: CoreParameters): String = {
+    import params.{frontendParams}
+    import frontendParams.{icacheParams}
+    import icacheParams.{nSets, nWays}
 
     val fileName = s"icache_meta_tag_${nSets}_${nWays}.mem"
     val hexFile  = new File("build", fileName)
@@ -58,13 +61,11 @@ object ICache {
     fileName
   }
 
-  class ICacheStorage(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ) extends Module {
+  class ICacheStorage(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import frontendParams.{icacheParams}
     import commonParams.{vaddrWidth, paddrWidth}
-    import cacheParams._
+    import icacheParams._
     private val metaTagInitFile = generateMetaTagHexFile
 
     val io = IO(new Bundle {
@@ -178,14 +179,11 @@ object ICache {
     }
   }
 
-  class ICacheStage0to1(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ) extends Module {
+  class ICacheStage0to1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import frontendParams.{icacheParams}
     import commonParams.{vaddrWidth, paddrWidth}
-    import cacheParams._
-    private val tagWidth = paddrWidth - setWidth - blockWidth
+    import icacheParams._
 
     val io = IO(new Bundle {
       val flush = Input(Bool())
@@ -209,18 +207,16 @@ object ICache {
     io.resp.bits    := io.readMeta.data
   }
 
-  class ICacheStage1(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ) extends Module {
-    import commonParams.{vaddrWidth, paddrWidth}
-    import cacheParams._
+  class ICacheStage1(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, axiParams, frontendParams}
+    import frontendParams.{fetchWidth, icacheParams}
+    import commonParams.{instBytes, instWidth, vaddrWidth, paddrWidth}
+    import icacheParams._
     import axiParams.{dataBits}
     private val tagWidth = paddrWidth - setWidth - blockWidth
     private val burstLen = blockBits / dataBits
-
-    require(dataBits == commonParams.dataWidth)
+    require(dataBits == instWidth)
+    require(fetchWidth == fetchBytes / instBytes)
 
     val io = IO(new Bundle {
       val axi = new AXIBundle(axiParams)
@@ -276,11 +272,11 @@ object ICache {
     val (burstCnt, _) =
       Counter(
         0 until burstLen,
-        io.axi.r.valid && io.axi.r.bits.id === cacheParams.id.U,
+        io.axi.r.valid && io.axi.r.bits.id === id.U,
         io.axi.ar.fire,
       )
     lineData(burstCnt) := Mux(
-      io.axi.r.valid && io.axi.r.bits.id === cacheParams.id.U,
+      io.axi.r.valid && io.axi.r.bits.id === id.U,
       io.axi.r.bits.data,
       lineData(burstCnt),
     )
@@ -299,18 +295,18 @@ object ICache {
         sReadBusResp -> Mux(
           io.req.valid,
           Mux(
-            io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === cacheParams.id.U,
+            io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === id.U,
             Mux(cached, sWriteBack, sSendReadResp),
             sReadBusResp,
           ),
           Mux(
-            io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === cacheParams.id.U,
+            io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === id.U,
             sHandleReq,
             sIgnoreBusResp,
           ),
         ),
         sIgnoreBusResp -> Mux(
-          io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === cacheParams.id.U,
+          io.axi.r.valid && io.axi.r.bits.last.asBool && io.axi.r.bits.id === id.U,
           sHandleReq,
           sIgnoreBusResp,
         ),
@@ -356,7 +352,7 @@ object ICache {
     io.dataWrite.data := lineData.asUInt
 
     io.axi.ar.valid     := state === sSendBusReq
-    io.axi.ar.bits.addr := paddr & ~(cacheParams.blockBytes - 1).U(commonParams.paddrWidth.W)
+    io.axi.ar.bits.addr := paddr & ~(blockBytes - 1).U(paddrWidth.W)
     io.axi.ar.bits.id   := id.U
     io.axi.ar.bits.len  := (burstLen - 1).U
 
@@ -377,13 +373,11 @@ object ICache {
     io.axi.b.ready := false.B
   }
 
-  class ICacheStage1to2(implicit
-      commonParams: CommonParameters,
-      cacheParams: CacheParameters,
-      axiParams: AXIBundleParameters,
-  ) extends Module {
+  class ICacheStage1to2(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, frontendParams}
+    import frontendParams.{icacheParams}
     import commonParams.{vaddrWidth, paddrWidth}
-    import cacheParams._
+    import icacheParams._
     private val tagWidth = paddrWidth - setWidth - blockWidth
 
     val io = IO(new Bundle {

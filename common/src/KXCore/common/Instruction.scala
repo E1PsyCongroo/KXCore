@@ -162,4 +162,272 @@ object Privilege {
     val TLBR = Value(0x3f.U)
     val ADEM = Value(0x7f.U)
   }
+
+  object CSR {
+    object CSRAddr {
+      val CRMD      = 0x000
+      val PRMD      = 0x001
+      val EUEN      = 0x002
+      val ECFG      = 0x004
+      val ESTAT     = 0x005
+      val ERA       = 0x006
+      val BADV      = 0x007
+      val EENTRY    = 0x00c
+      val TLBIDX    = 0x010
+      val TLBEHI    = 0x011
+      val TLBELO0   = 0x012
+      val TLBELO1   = 0x013
+      val ASID      = 0x018
+      val PGDL      = 0x019
+      val PGDH      = 0x01a
+      val CPUID     = 0x020
+      val SAVED0    = 0x030
+      val SAVED1    = 0x031
+      val SAVED2    = 0x032
+      val SAVED3    = 0x033
+      val TID       = 0x040
+      val TCFG      = 0x041
+      val TVAL      = 0x042
+      val TICLR     = 0x044
+      val LLBCTL    = 0x060
+      val TLBRENTRY = 0x088
+      val CTAG      = 0x098
+      val DMW0      = 0x180
+      val DMW1      = 0x181
+    }
+
+    class CRMD extends Bundle {
+      val value = UInt(32.W)
+
+      def plv  = value(1, 0) // Privilege level
+      def ie   = value(2)    // Interrupt enable
+      def da   = value(3)    // Debug active
+      def pg   = value(4)    // Modify privilege
+      def datf = value(6, 5) // Data address translation fault
+      def datm = value(8, 7) // Data address translation mode
+
+      def write(value: UInt): UInt = {
+        value & 0x1ff.U(32.W)
+      }
+
+      def set_da(da: Bool): CRMD = {
+        val write_mask = 0x8.U(32.W)
+        ((value & ~write_mask) | (da.asUInt << 3)).asTypeOf(this)
+      }
+
+      def set_plv(plv: UInt): CRMD = {
+        val write_mask = 0x3.U(32.W)
+        ((value & ~write_mask) | (plv & write_mask)).asTypeOf(this)
+      }
+
+      def set_ie(ie: Bool): CRMD = {
+        val write_mask = 0x4.U(32.W)
+        ((value & ~write_mask) | (ie.asUInt << 2)).asTypeOf(this)
+      }
+    }
+
+    class PRMD extends Bundle {
+      val value = UInt(32.W)
+
+      def pplv = value(1, 0) // Privilege level
+      def pie  = value(2)    // Interrupt enable
+
+      def write(value: UInt): UInt = {
+        value & 0x3.U(32.W)
+      }
+
+      def set_pplv(pplv: UInt): PRMD = {
+        val write_mask = 0x3.U(32.W)
+        ((value & ~write_mask) | (pplv & write_mask)).asTypeOf(this)
+      }
+
+      def set_pie(pie: Bool): PRMD = {
+        val write_mask = 0x4.U(32.W)
+        ((value & ~write_mask) | (pie.asUInt << 2)).asTypeOf(this)
+      }
+    }
+
+    class ECFG extends Bundle {
+      val value = UInt(32.W)
+
+      def lie = value(12, 0)
+
+      def write(value: UInt): UInt = {
+        val write_mask = 0x3ff.U | (0x3.U << 11)
+        value & write_mask
+      }
+    }
+
+    class ESTAT extends Bundle {
+      val value = UInt(32.W)
+
+      def is = value(12, 0)
+
+      def ecode     = value(21, 16)
+      def sub_ecode = value(30, 22)
+
+      def write(value: UInt): UInt = {
+        val write_mask = 0x3.U(32.W)
+        (value & write_mask) | (this.value & ~write_mask)
+      }
+
+      def set_sample(sample: UInt): ESTAT = {
+        val write_mask = 0xff.U(32.W) << 2
+        ((value & ~write_mask) | (sample << 2)).asTypeOf(this)
+      }
+
+      def set_tis(tis: Bool): ESTAT = {
+        val write_mask = 0x1.U(32.W) << 11
+        ((value & ~write_mask) | (tis.asUInt << 11)).asTypeOf(this)
+      }
+
+      def set_ecode(ecode: UInt): ESTAT = {
+        val write_mask = 0x3f.U(32.W) << 16
+        ((value & ~write_mask) | (ecode << 16)).asTypeOf(this)
+      }
+
+      def set_sub_ecode(sub_ecode: UInt): ESTAT = {
+        val write_mask = 0x1ff.U(32.W) << 22
+        ((value & ~write_mask) | (sub_ecode << 22)).asTypeOf(this)
+      }
+    }
+
+    class EENTRY extends Bundle {
+      val value = UInt(32.W)
+
+      def write(value: UInt): UInt = {
+        value & ~0x1f.U(32.W)
+      }
+    }
+
+    class TLBIDX(n: Int) extends Bundle {
+      val value = UInt(32.W)
+
+      require(n <= 16)
+
+      def index = value(n - 1, 0)
+      def ps    = value(29, 24)
+      def ne    = value(31)
+
+      def write(value: UInt): UInt = {
+        value & ("b1011_1111_0000_0000".U(16.W) ## Fill(16 - n, 0.B) ## Fill(n, 1.B))
+      }
+    }
+
+    class TLBEHI extends Bundle {
+      val value = UInt(32.W)
+
+      def vppn = value(31, 13)
+
+      def write(value: UInt): UInt = {
+        value & ~0x1fff.U(32.W)
+      }
+    }
+
+    class TLBELO(paddrWidth: Int) extends Bundle {
+      val value = UInt(32.W)
+
+      def v   = value(0)
+      def d   = value(1)
+      def plv = value(3, 2)
+      def mat = value(5, 4)
+      def g   = value(6)
+      def ppn = value(paddrWidth - 5, 8)
+
+      def write(value: UInt): UInt = {
+        value & (Fill(paddrWidth - 12, 1.B) ## "b0111_1111".U(8.W))
+      }
+    }
+
+    class ASID extends Bundle {
+      val value = UInt(32.W)
+
+      def asid     = value(9, 0)
+      def asidbits = 10.U(8.W)
+
+      def write(value: UInt): UInt = {
+        (value & 0x3ff.U(32.W)) | 0xa0000.U(32.W)
+      }
+    }
+
+    class Timer extends Module {
+      val io = IO(new Bundle {
+        val waddr = Input(UInt(12.W))
+        val wdata = Input(UInt(32.W))
+        val wen   = Input(Bool())
+
+        val tcfg = Output(UInt(32.W))
+        val tval = Output(UInt(32.W))
+
+        val pending = Output(Bool())
+      })
+
+      val en        = RegInit(false.B)
+      val periodic  = RegInit(false.B)
+      val initvalue = RegInit(0.U(32.W))
+      val pending   = RegInit(false.B)
+      val tval      = RegInit(0.U(32.W))
+
+      val write_tfcg = io.waddr === CSRAddr.TCFG.U && io.wen
+
+      en       := Mux(write_tfcg, io.wdata(0), en)
+      periodic := Mux(write_tfcg, io.wdata(1), periodic)
+
+      val tcfg_initvalue = Cat(io.wdata(31, 2), 0.U(2.W))
+      initvalue := Mux(write_tfcg, tcfg_initvalue, initvalue)
+
+      tval := Mux(
+        write_tfcg,
+        tcfg_initvalue,
+        Mux(
+          en,
+          Mux(tval === 0.U, Mux(periodic, initvalue, tval), tval - 1.U),
+          tval,
+        ),
+      )
+
+      val write_ticlr = io.waddr === CSRAddr.TICLR.U && io.wen
+      // pending := Mux(
+      //   write_ticlr && io.wdata(0),
+      //   false.B,
+      //   Mux(en && (tval === 1.U || initvalue === 0.U), true.B, pending),
+      // )
+      pending := MuxCase(
+        false.B,
+        Seq(
+          (write_tfcg && io.wdata(0) && tcfg_initvalue === 0.U)     -> true.B,
+          (en && (tval === 1.U || (initvalue === 0.U && periodic))) -> true.B,
+          (pending && !(write_ticlr && io.wdata(0)))                -> true.B,
+        ),
+      )
+
+      io.pending := pending
+      io.tval    := tval
+      io.tcfg    := Cat(initvalue(31, 2), periodic, en)
+    }
+  }
+
+  class TLBRENTRY extends Bundle {
+    val value = UInt(32.W)
+
+    def write(value: UInt): UInt = {
+      value & ~0x3f.U(32.W)
+    }
+  }
+
+  class DMW extends Bundle {
+    val value = UInt(32.W)
+
+    def plv0 = value(0)
+    def plv3 = value(3)
+    def mat  = value(5, 4)
+    def pseg = value(27, 25)
+    def vseg = value(31, 29)
+
+    def write(value: UInt): UInt = {
+      val write_mask = "hee000039".U
+      value & write_mask
+    }
+  }
+
 }

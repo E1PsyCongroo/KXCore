@@ -46,7 +46,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
 
   val io = IO(new FrontEndIO)
 
-  val icache = Module(new ICache.ICacheStorage()(commonParams, icacheParams, axiParams))
+  val icache = Module(new ICache.ICacheStorage)
   val bpu    = Module(new BranchPredictor.BranchPredictorStorage)
 
   val flush = Wire(new Bundle {
@@ -65,7 +65,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
 
   // stage0: pre-fetch
   val icacheArb       = Module(new Arbiter(io.icacheReq.bits.cloneType, 2))
-  val icacheStage0to1 = Module(new ICache.ICacheStage0to1()(commonParams, icacheParams, axiParams))
+  val icacheStage0to1 = Module(new ICache.ICacheStage0to1)
   val bpuStage0to1    = Module(new BranchPredictor.BranchPredictorStage0to1)
   val pipeStage0to1 = Module(
     new PipeStageReg(
@@ -140,9 +140,9 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   bpuStage0to1.io.holdRead := pipeStage0to1.io.out.bits.fetchPC
 
   // stage1: fetch & branch prediction
-  val icacheStage1    = Module(new ICache.ICacheStage1()(commonParams, icacheParams, axiParams))
+  val icacheStage1    = Module(new ICache.ICacheStage1)
   val bpuStage1       = Module(new BranchPredictor.BranchPredictorStage1)
-  val icacheStage1to2 = Module(new ICache.ICacheStage1to2()(commonParams, icacheParams, axiParams))
+  val icacheStage1to2 = Module(new ICache.ICacheStage1to2)
   val pipeStage1to2 = Module(
     new PipeStageReg(
       new Bundle {

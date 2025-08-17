@@ -39,17 +39,18 @@ object EXUType extends ChiselEnum {
   val EXU_STW  = EXU_SLTU
 
   val EXU_CPUCFG  = EXU_SLL
-  val EXU_TLBWR   = EXU_EQ
-  val EXU_TLBFILL = EXU_SRL
-  val EXU_INVTLB  = EXU_SRA
-  val EXU_RDCNTID = EXU_NEQ
-  val EXU_RDCNTVL = EXU_ADD
-  val EXU_RDCNTVH = EXU_XOR
-  val EXU_CSRRD   = EXU_AND
-  val EXU_CSRXCHG = EXU_SUB
-  val EXU_CSRWR   = EXU_SLT
-  val EXU_TLBSRCH = EXU_SLTU
-  val EXU_TLBRD   = EXU_OR
+  val EXU_TLBNONE = EXU_SLL
+  val EXU_TLBSRCH = EXU_EQ
+  val EXU_TLBRD   = EXU_SRL
+  val EXU_TLBWR   = EXU_SRA
+  val EXU_TLBFILL = EXU_NEQ
+  val EXU_INVTLB  = EXU_ADD
+  val EXU_RDCNTID = EXU_AND
+  val EXU_RDCNTVL = EXU_SUB
+  val EXU_RDCNTVH = EXU_SLT
+  val EXU_CSRRD   = EXU_SLTU
+  val EXU_CSRXCHG = EXU_NOR
+  val EXU_CSRWR   = EXU_SGE
 
   def isSub(cmd: UInt)           = cmd(3)
   def isCmp(cmd: UInt)           = cmd(3) & (cmd(0) ^ cmd(1))
@@ -60,7 +61,7 @@ object EXUType extends ChiselEnum {
   def shiftArith(cmd: UInt)      = cmd(0)
   def mul_divUnsigned(cmd: UInt) = cmd(1)
   def ismulh_mod(cmd: UInt)      = cmd(0)
-  def csrWen(cmd: UInt)          = cmd(3)
+  def csrWen(cmd: UInt)          = cmd(3) & cmd(2)
   def isSotre(cmd: UInt)         = cmd(3)
 }
 
