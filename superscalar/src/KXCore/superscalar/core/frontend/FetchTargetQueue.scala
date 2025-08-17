@@ -80,11 +80,6 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     maybe_full := false.B
 
     when(io.redirect.brRecovery.valid) {
-      redirect_new_entry.brMask := Mux(
-        io.redirect.brRecovery.cfiIdx.valid,
-        MaskLower(UIntToOH(io.redirect.brRecovery.cfiIdx.bits)) & redirect_entry.brMask,
-        redirect_entry.brMask,
-      )
       redirect_new_entry.cfiIdx    := io.redirect.brRecovery.cfiIdx
       redirect_new_entry.cfiIsB    := io.redirect.brRecovery.cfiIsB
       redirect_new_entry.cfiIsBr   := io.redirect.brRecovery.cfiIsBr
@@ -101,9 +96,13 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     val bpuEntry = ram(bpu_ptr)
     val target   = ram(WrapInc(bpu_ptr, ftqNum)).fetchPC
 
-    io.bpuUpdate.valid     := bpuEntry.cfiIdx.valid || bpuEntry.brMask =/= 0.U
-    io.bpuUpdate.fetchPC   := bpuEntry.fetchPC
-    io.bpuUpdate.brMask    := bpuEntry.brMask
+    io.bpuUpdate.valid   := bpuEntry.cfiIdx.valid || bpuEntry.brMask =/= 0.U
+    io.bpuUpdate.fetchPC := bpuEntry.fetchPC
+    io.bpuUpdate.brMask := Mux(
+      bpuEntry.cfiIdx.valid,
+      MaskLower(UIntToOH(bpuEntry.cfiIdx.bits)) & bpuEntry.brMask,
+      bpuEntry.brMask,
+    )
     io.bpuUpdate.cfiIdx    := bpuEntry.cfiIdx
     io.bpuUpdate.cfiIsB    := bpuEntry.cfiIsB
     io.bpuUpdate.cfiIsBr   := bpuEntry.cfiIsBr

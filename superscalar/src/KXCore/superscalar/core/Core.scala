@@ -86,8 +86,8 @@ class Core(implicit params: CoreParameters) extends Module {
   axiAribter.io.out   <> io.axi
 
   frontend.io.icacheClear       := false.B
-  frontend.io.icacheReq.valid   := false.B
-  frontend.io.icacheReq.bits    := DontCare
+  frontend.io.icacheReq.valid   := backend.io.icacheReq.valid
+  frontend.io.icacheReq.bits    := backend.io.icacheReq.bits
   frontend.io.itlbResp          := tlb.io.transResp0
   frontend.io.fetchPacket.ready := backend.io.fetchPacket.ready
   frontend.io.ftqReqs(0)        := backend.io.ftqReqs(0)
@@ -102,6 +102,7 @@ class Core(implicit params: CoreParameters) extends Module {
   backend.io.ftqResps(0)       := frontend.io.ftqResps(0)
   backend.io.ftqResps(1)       := frontend.io.ftqResps(1)
   backend.io.ftqResps(2)       := frontend.io.ftqResps(2)
+  backend.io.icacheReq.ready   := frontend.io.icacheReq.ready
 
   io.ws_valid := false.B
   io.rf_rdata := 0.U

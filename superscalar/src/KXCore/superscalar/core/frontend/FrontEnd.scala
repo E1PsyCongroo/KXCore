@@ -12,7 +12,7 @@ import KXCore.superscalar.core.backend._
 
 class FrontEndIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, axiParams, frontendParams}
-  import commonParams.{vaddrWidth}
+  import commonParams.{vaddrWidth, paddrWidth}
   import frontendParams.{ftqIdxWidth}
 
   val axi      = new AXIBundle(axiParams)
@@ -64,7 +64,6 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   flush.stage2 := backendRedirect.valid
 
   // stage0: pre-fetch
-  val icacheCacopReg  = Module(new PipeStageReg(io.icacheReq.bits.cloneType, false))
   val icacheArb       = Module(new Arbiter(io.icacheReq.bits.cloneType, 2))
   val icacheStage0to1 = Module(new ICache.ICacheStage0to1()(commonParams, icacheParams, axiParams))
   val bpuStage0to1    = Module(new BranchPredictor.BranchPredictorStage0to1)
@@ -81,14 +80,15 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
     ),
   )
 
+  val s0_stall     = RegInit(false.B)
   val s0_fetchPC   = Wire(UInt(vaddrWidth.W))
   val s0_npc       = RegInit(pcReset.U)
   val s0_cacop     = WireInit(icacheArb.io.out.bits.cacop)
-  val s0_cached    = io.itlbResp.mat(0)
+  val s0_cached    = true.B //io.itlbResp.mat(0)
   val s0_paddr     = io.itlbResp.paddr
   val s0_isAdef    = Wire(Bool())
   val s0_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
-  val s0_fire      = pipeStage0to1.io.in.ready && icacheStage0to1.io.req.ready && bpuStage0to1.io.req.ready
+  val s0_fire      = pipeStage0to1.io.in.ready && icacheStage0to1.io.req.ready && bpuStage0to1.io.req.ready && !s0_stall
   s0_fetchPC := MuxCase(
     s0_npc,
     Seq(
@@ -97,7 +97,8 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
       stage1Redirect.valid  -> stage1Redirect.bits,
     ),
   )
-  s0_npc := s0_fetchPC
+  s0_stall := Mux(flush.stage1, false.B, Mux(s0_exception.valid && s0_fire, true.B, s0_stall))
+  s0_npc   := s0_fetchPC
   s0_isAdef := (icacheArb.io.out.bits.cacop === CACOP_HIT_READ.asUInt) &&
     (icacheArb.io.out.bits.vaddr(1, 0) =/= 0.U)
   s0_exception.valid := s0_isAdef ||
@@ -116,8 +117,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheArb.io.in(0).bits.cacop := CACOP_HIT_READ.asUInt
   icacheArb.io.in(0).bits.vaddr := s0_fetchPC
 
-  icacheCacopReg.io.in <> io.icacheReq
-  icacheArb.io.in(1)   <> icacheCacopReg.io.out
+  icacheArb.io.in(1) <> io.icacheReq
 
   icacheArb.io.out.ready := s0_fire
 
@@ -321,9 +321,9 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
     UIntToOH(s2_fetchPC(log2Ceil(fetchBytes) - 1, log2Ceil(instBytes))),
     s2_fetchMask & ~(MaskUpper(s2_cfiMask) << 1.U),
   )
-  s2_fetchBundle.brMask       := s2_brMask & s2_fetchBundle.mask
-  s2_fetchBundle.bMask        := s2_bMask & s2_fetchBundle.mask
-  s2_fetchBundle.jirlMask     := s2_jirlMask & s2_fetchBundle.mask
+  s2_fetchBundle.brMask       := s2_brMask
+  s2_fetchBundle.bMask        := s2_bMask
+  s2_fetchBundle.jirlMask     := s2_jirlMask
   s2_fetchBundle.cfiIdx.valid := s2_cfiMask.orR
   s2_fetchBundle.cfiIdx.bits  := s2_cfiIdx
   s2_fetchBundle.ftqIdx       := ftq.io.enqIdx

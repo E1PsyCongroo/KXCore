@@ -98,7 +98,7 @@ object ICache {
       }
     })
 
-    val valids = RegInit(VecInit.fill(nSets)(VecInit.fill(nWays)(false.B)))
+    val valids = RegInit(VecInit.fill(nSets, nWays)(false.B))
     val tags   = SyncReadMem(nSets, Vec(nWays, UInt((new ICacheMeta).tag.getWidth.W)))
     loadMemoryFromFileInline(tags, metaTagInitFile, MemoryLoadFileType.Binary)
     val data = Seq.tabulate(nBanks) { _ =>
@@ -114,8 +114,8 @@ object ICache {
     val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)
 
     io.metaPort.read.data zip rtags zip rvalids foreach { case ((port, tag), valid) =>
-      port.tag   := tag
       port.valid := valid
+      port.tag   := tag
     }
 
     when(io.clear) {
@@ -134,7 +134,7 @@ object ICache {
       )
       io.dataPort.read.data := VecInit(
         data.zipWithIndex.map { case (wayData, i) =>
-          val writeData = WireDefault(io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i))
+          val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
           VecInit(wayData.zipWithIndex.map { case (data, w) =>
             val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
             data.readWrite(
@@ -163,7 +163,7 @@ object ICache {
         },
       ).asUInt
       data.zipWithIndex.foreach { case (wayData, i) =>
-        val writeData = WireDefault(io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i))
+        val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
         wayData.zipWithIndex.foreach { case (data, w) =>
           val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
           when(wen) { data.write(io.dataPort.write.set, writeData) }
@@ -213,7 +213,9 @@ object ICache {
     import cacheParams._
     import axiParams.{dataBits}
     private val tagWidth = paddrWidth - setWidth - blockWidth
-    private val burstLen = blockBits / axiParams.dataBits
+    private val burstLen = blockBits / dataBits
+
+    require(dataBits == commonParams.dataWidth)
 
     val io = IO(new Bundle {
       val axi = new AXIBundle(axiParams)
@@ -260,13 +262,12 @@ object ICache {
     val matches = wayMeta.map(meta => meta.valid && meta.tag === tag)
     val matched = PriorityEncoder(matches)
     val hit     = matches.reduce(_ || _)
-
     assert(PopCount(matches) < 2.U)
 
     val invalids    = wayMeta.map(!_.valid)
     val random      = if (nWays == 1) 0.U else GaloisLFSR.maxPeriod(wayWidth)
     val replacedSel = RegEnable(Mux(invalids.reduce(_ || _), PriorityEncoder(invalids), random), io.axi.ar.fire)
-    val lineData    = Reg(Vec(burstLen, UInt(axiParams.dataBits.W)))
+    val lineData    = Reg(Vec(burstLen, UInt(dataBits.W)))
     val (burstCnt, _) =
       Counter(
         0 until burstLen,

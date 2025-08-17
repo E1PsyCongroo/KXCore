@@ -23,8 +23,12 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
   val fetchPacket = Flipped(Decoupled(new FetchBufferResp()))
   val ftqReqs     = Output(Vec(3, UInt(ftqIdxWidth.W)))
   val ftqResps    = Input(Vec(3, new FTQInfo))
-  val commit      = Valid(UInt(ftqIdxWidth.W))
-  val redirect    = Output(new RoBRedirectIO)
+  val icacheReq = Decoupled(new Bundle {
+    val cacop = UInt(CACOPType.getWidth.W)
+    val vaddr = UInt(vaddrWidth.W)
+  })
+  val commit   = Valid(UInt(ftqIdxWidth.W))
+  val redirect = Output(new RoBRedirectIO)
   val csr_access = new Bundle {
     val raddr = Output(UInt(14.W))       // CSR address to read
     val rdata = Input(UInt(dataWidth.W)) // CSR read data
@@ -196,6 +200,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   io.axi                    <> memExeUnit.io_axi
   io.dtlbReq                := memExeUnit.io_dtlb_req
   memExeUnit.io_dtlb_resp   := io.dtlbResp
+  io.icacheReq.valid        := false.B
+  io.icacheReq.bits         := DontCare
 
   io.csr_access.raddr                := unqExeUnit.io_csr_access.get.raddr
   unqExeUnit.io_csr_access.get.rdata := io.csr_access.rdata
