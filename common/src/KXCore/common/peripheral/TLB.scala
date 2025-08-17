@@ -62,7 +62,6 @@ object TLBCmd {
   val CMD_FILL = 3
   val CMD_INV  = 4
   val CMD_NONE = 5
-  val CMD_NOP  = 5
 }
 
 class TLBCmd extends Bundle {
