@@ -52,12 +52,16 @@ class Core(implicit params: CoreParameters) extends Module {
   tlb.io.mode.matf := csr.io.tlb.matf
   tlb.io.mode.matd := csr.io.tlb.matd
 
-  tlb.io.transReq0 := frontend.io.itlbReq
-  tlb.io.transReq1 := backend.io.dtlbReq
-  tlb.io.cmd_in    := 0.U.asTypeOf(tlb.io.cmd_in)
+  tlb.io.transReq0          := frontend.io.itlbReq
+  tlb.io.transReq1          := backend.io.dtlbReq
+  tlb.io.cmd_in.cmd         := 0.U.asTypeOf(tlb.io.cmd_in.cmd)
+  tlb.io.cmd_in.estat_ecode := csr.io.ecode
+  tlb.io.cmd_in.inv_op      := DontCare
 
   csr.io.raddr                := backend.io.csr_access.raddr
   backend.io.csr_access.rdata := csr.io.rdata
+
+  csr.io.tlb_cmd := tlb.io.cmd_out.cmd
 
   csr.io.we    := backend.io.csr_access.we
   csr.io.waddr := backend.io.csr_access.waddr
@@ -279,11 +283,11 @@ class Core(implicit params: CoreParameters) extends Module {
       difftestCSRRegState.io.era       := csr.io.debug.era
       difftestCSRRegState.io.badv      := csr.io.debug.badv
       difftestCSRRegState.io.eentry    := csr.io.debug.eentry
-      difftestCSRRegState.io.tlbidx    := tlb.io.cmd_out.tlb_idx
-      difftestCSRRegState.io.tlbehi    := tlb.io.cmd_out.tlb_ehi
-      difftestCSRRegState.io.tlbelo0   := tlb.io.cmd_out.tlb_elo0
-      difftestCSRRegState.io.tlbelo1   := tlb.io.cmd_out.tlb_elo1
-      difftestCSRRegState.io.asid      := tlb.io.cmd_out.tlb_asid
+      difftestCSRRegState.io.tlbidx    := csr.io.debug.tlbidx
+      difftestCSRRegState.io.tlbehi    := csr.io.debug.tlbehi
+      difftestCSRRegState.io.tlbelo0   := csr.io.debug.tlbelo0
+      difftestCSRRegState.io.tlbelo1   := csr.io.debug.tlbelo1
+      difftestCSRRegState.io.asid      := csr.io.debug.asid
       difftestCSRRegState.io.pgdl      := 0.U
       difftestCSRRegState.io.pgdh      := 0.U
       difftestCSRRegState.io.save0     := csr.io.debug.saved0

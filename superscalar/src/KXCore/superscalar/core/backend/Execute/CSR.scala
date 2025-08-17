@@ -179,21 +179,27 @@ class Timer extends Module {
 }
 
 object CSRAddr {
-  val CRMD   = 0x000
-  val PRMD   = 0x001
-  val ECFG   = 0x004
-  val ESTAT  = 0x005
-  val ERA    = 0x006
-  val BADV   = 0x007
-  val EENTRY = 0x00c
-  val SAVED0 = 0x030
-  val TID    = 0x040
-  val TCFG   = 0x041
-  val TVAL   = 0x042
-  val TICLR  = 0x044
-  val TLBRE  = 0x088
-  val DMW0   = 0x180
-  val DMW1   = 0x181
+  val CRMD    = 0x000
+  val PRMD    = 0x001
+  val ECFG    = 0x004
+  val ESTAT   = 0x005
+  val ERA     = 0x006
+  val BADV    = 0x007
+  val EENTRY  = 0x00c
+  val TLBIDX  = 0x010
+  val TLBEHI  = 0x011
+  val TLBELO0 = 0x012
+  val TLBELO1 = 0x013
+  val ASID    = 0x018
+  val SAVED0  = 0x030
+  val TID     = 0x040
+  val TCFG    = 0x041
+  val TVAL    = 0x042
+  val TICLR   = 0x044
+  val LLBTL   = 0x060
+  val TLBRE   = 0x088
+  val DMW0    = 0x180
+  val DMW1    = 0x181
 }
 
 class CSRIO(implicit params: CoreParameters) extends Bundle {
@@ -223,6 +229,10 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
   val cntvh     = Output(UInt(dataWidth.W))
   val cntvl     = Output(UInt(dataWidth.W))
   /* ------ Global State ------ */
+
+  /* ------ TLB Command ------ */
+  val tlb_cmd = Input(new TLBCmd)
+  /* ------ TLB Command ------ */
 
   /* ------ Exception Enter ------ */
   val epc       = Input(UInt(vaddrWidth.W)) // Program counter for exception handling
@@ -265,6 +275,11 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
     val tcfg      = UInt(dataWidth.W)
     val tval      = UInt(dataWidth.W)
     val tlbrentry = UInt(dataWidth.W)
+    val tlbidx    = UInt(dataWidth.W)
+    val tlbehi    = UInt(dataWidth.W)
+    val tlbelo0   = UInt(dataWidth.W)
+    val tlbelo1   = UInt(dataWidth.W)
+    val asid      = UInt(dataWidth.W)
     val dmw0      = UInt(dataWidth.W)
     val dmw1      = UInt(dataWidth.W)
   })
@@ -283,7 +298,15 @@ class CSR(implicit params: CoreParameters) extends Module {
   val saved     = Reg(Vec(4, UInt(32.W)))
   val tid       = Reg(UInt(32.W))
   val tlbrentry = RegInit(0.U.asTypeOf(new TLBRENTRY))
+  val tlbidx    = Reg(UInt(32.W))
+  val tlbehi    = Reg(UInt(32.W))
+  val tlbelo0   = Reg(UInt(32.W))
+  val tlbelo1   = Reg(UInt(32.W))
+  val asid      = Reg(UInt(32.W))
   val dmw       = RegInit(VecInit(Seq.fill(2)(0.U.asTypeOf((new DMW)))))
+
+  val llbit = RegInit(false.B)
+  val klo   = RegInit(false.B)
 
   /* ------ Global State ------ */
   io.priv     := crmd.plv()
@@ -339,7 +362,16 @@ class CSR(implicit params: CoreParameters) extends Module {
     era   := io.epc
   }.elsewhen(io.eret_en) {
     crmd := eret_crmd
+    klo  := false.B
+    llbit := Mux(klo, llbit, false.B)
     // prmd := eret_prmd
+  }.elsewhen(io.tlb_cmd.cmd === TLBCmd.CMD_SRCH.U) {
+    tlbidx := io.tlb_cmd.tlb_idx
+  }.elsewhen(io.tlb_cmd.cmd === TLBCmd.CMD_RD.U) {
+    tlbidx  := io.tlb_cmd.tlb_idx
+    tlbehi  := io.tlb_cmd.tlb_ehi
+    tlbelo0 := io.tlb_cmd.tlb_elo0
+    tlbelo1 := io.tlb_cmd.tlb_elo1
   }.elsewhen(io.we) {
     val wdata = io.wdata & io.wmask
 
@@ -351,6 +383,12 @@ class CSR(implicit params: CoreParameters) extends Module {
       dmw(i).value := Mux(io.waddr === (CSRAddr.DMW0 + i).U, dmw(i).write(wdata | (dmw(i).value & ~io.wmask)), dmw(i).value)
     }
 
+    asid    := Mux(io.waddr === CSRAddr.ASID.U, wdata | (asid & ~io.wmask), asid)
+    tlbidx  := Mux(io.waddr === CSRAddr.TLBIDX.U, wdata | (tlbidx & ~io.wmask), tlbidx)
+    tlbehi  := Mux(io.waddr === CSRAddr.TLBEHI.U, wdata | (tlbehi & ~io.wmask), tlbehi)
+    tlbelo0 := Mux(io.waddr === CSRAddr.TLBELO0.U, wdata | (tlbelo0 & ~io.wmask), tlbelo0)
+    tlbelo1 := Mux(io.waddr === CSRAddr.TLBELO1.U, wdata | (tlbelo1 & ~io.wmask), tlbelo1)
+
     crmd.value := Mux(io.waddr === CSRAddr.CRMD.U, crmd.write(wdata | (crmd.value & ~io.wmask)), crmd.value)
     prmd.value := Mux(io.waddr === CSRAddr.PRMD.U, prmd.write(wdata | (prmd.value & ~io.wmask)), prmd.value)
 
@@ -361,6 +399,8 @@ class CSR(implicit params: CoreParameters) extends Module {
     tlbrentry.value := Mux(io.waddr === CSRAddr.TLBRE.U, tlbrentry.write(wdata | (tlbrentry.value & !io.wmask)), tlbrentry.value)
 
     tid := Mux(io.waddr === CSRAddr.TID.U, wdata | (tid & ~io.wmask), tid)
+
+    llbit := Mux(io.waddr === CSRAddr.LLBTL.U && ((wdata & 0b10.U) === 0b10.U), false.B, llbit)
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }
@@ -369,17 +409,23 @@ class CSR(implicit params: CoreParameters) extends Module {
   /* ------ Read Logic ------ */
   io.rdata := MuxLookup(io.raddr, 0.U(32.W))(
     Seq(
-      CSRAddr.CRMD.U   -> crmd.value,
-      CSRAddr.PRMD.U   -> prmd.value,
-      CSRAddr.ECFG.U   -> ecfg.value,
-      CSRAddr.BADV.U   -> badv,
-      CSRAddr.ESTAT.U  -> estat.value,
-      CSRAddr.ERA.U    -> era,
-      CSRAddr.EENTRY.U -> eentry.value,
-      CSRAddr.TID.U    -> tid,
-      CSRAddr.TCFG.U   -> timer.io.tcfg,
-      CSRAddr.TVAL.U   -> timer.io.tval,
-      CSRAddr.TICLR.U  -> 0.U,// TICLR is always read as 0
+      CSRAddr.CRMD.U    -> crmd.value,
+      CSRAddr.PRMD.U    -> prmd.value,
+      CSRAddr.ECFG.U    -> ecfg.value,
+      CSRAddr.BADV.U    -> badv,
+      CSRAddr.ESTAT.U   -> estat.value,
+      CSRAddr.ERA.U     -> era,
+      CSRAddr.EENTRY.U  -> eentry.value,
+      CSRAddr.TLBIDX.U  -> tlbidx,
+      CSRAddr.TLBEHI.U  -> tlbehi,
+      CSRAddr.TLBELO0.U -> tlbelo0,
+      CSRAddr.TLBELO1.U -> tlbelo1,
+      CSRAddr.ASID.U    -> asid,
+      CSRAddr.LLBTL.U   -> llbit.asUInt,
+      CSRAddr.TID.U     -> tid,
+      CSRAddr.TCFG.U    -> timer.io.tcfg,
+      CSRAddr.TVAL.U    -> timer.io.tval,
+      CSRAddr.TICLR.U   -> 0.U,// TICLR is always read as 0
     ) ++ (0 until 4).map(i => (CSRAddr.SAVED0 + i).U -> saved(i)),
   )
   io.counterID := tid
@@ -403,6 +449,11 @@ class CSR(implicit params: CoreParameters) extends Module {
   io.debug.tcfg      := timer.io.tcfg
   io.debug.tval      := timer.io.tval
   io.debug.tlbrentry := tlbrentry.value
+  io.debug.tlbidx    := tlbidx
+  io.debug.tlbehi    := tlbehi
+  io.debug.tlbelo0   := tlbelo0
+  io.debug.tlbelo1   := tlbelo1
+  io.debug.asid      := asid
   io.debug.dmw0      := dmw(0).value
   io.debug.dmw1      := dmw(1).value
   /* ------ Debug Info ------ */
