@@ -110,13 +110,18 @@ object ICache {
     assert(!(io.metaPort.read.en && io.metaPort.write.en))
     assert(!(io.dataPort.read.en && io.dataPort.write.en))
 
-    val rtags   = Wire(Vec(nWays, UInt((new ICacheMeta).tag.getWidth.W)))
     val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)
+    val rtags   = Wire(Vec(nWays, UInt((new ICacheMeta).tag.getWidth.W)))
+    val rdata   = Wire(UInt(blockBits.W))
 
-    io.metaPort.read.data zip rtags zip rvalids foreach { case ((port, tag), valid) =>
-      port.valid := valid
-      port.tag   := tag
+    val rtagsReg = RegEnable(rtags, RegNext(io.metaPort.read.en))
+    val rdataReg = RegEnable(rdata, RegNext(io.dataPort.read.en))
+
+    for (w <- 0 until nWays) {
+      io.metaPort.read.data(w).valid := rvalids(w)
+      io.metaPort.read.data(w).tag   := Mux(RegNext(io.metaPort.read.en), rtags(w), rtagsReg(w))
     }
+    io.dataPort.read.data := Mux(RegNext(io.dataPort.read.en), rdata, rdataReg)
 
     when(io.clear) {
       valids.foreach(_.foreach(_ := false.B))
@@ -132,18 +137,19 @@ object ICache {
         io.metaPort.read.en || io.metaPort.write.en,
         io.metaPort.write.en,
       )
-      io.dataPort.read.data := VecInit(
+      rdata := VecInit(
         data.zipWithIndex.map { case (wayData, i) =>
           val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
           VecInit(wayData.zipWithIndex.map { case (data, w) =>
+            val ren = io.dataPort.read.en && (io.dataPort.read.way === w.U)
             val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
             data.readWrite(
               Mux(wen, io.dataPort.write.set, io.dataPort.read.set),
               writeData,
-              io.dataPort.read.en || io.dataPort.write.en,
+              ren || wen,
               wen,
             )
-          })(io.dataPort.read.way)
+          })(RegNext(io.dataPort.read.way))
         },
       ).asUInt
     } else {
@@ -154,12 +160,12 @@ object ICache {
         (UIntToOH(io.metaPort.write.way) & Fill(nWays, io.metaPort.write.en)).asBools,
       )
 
-      io.dataPort.read.data := VecInit(
+      rdata := VecInit(
         data.map { wayData =>
           VecInit(wayData.zipWithIndex.map { case (data, w) =>
-            val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
-            data.read(io.dataPort.read.set, wen)
-          })(io.dataPort.read.way)
+            val ren = io.dataPort.read.en && (io.dataPort.read.way === w.U)
+            data.read(io.dataPort.read.set, ren)
+          })(RegNext(io.dataPort.read.way))
         },
       ).asUInt
       data.zipWithIndex.foreach { case (wayData, i) =>
@@ -188,9 +194,8 @@ object ICache {
         val set  = Output(UInt(setWidth.W))
         val data = Input(Vec(nWays, new ICacheMeta))
       }
-      val holdRead = Input(UInt(vaddrWidth.W))
-      val req      = Flipped(Decoupled(UInt(vaddrWidth.W)))
-      val resp     = Decoupled(Vec(nWays, new ICacheMeta))
+      val req  = Flipped(Decoupled(UInt(vaddrWidth.W)))
+      val resp = Decoupled(Vec(nWays, new ICacheMeta))
     })
 
     val en     = RegInit(false.B)
@@ -199,8 +204,8 @@ object ICache {
     io.req.ready  := (nextEn === 0.U) || io.flush
     io.resp.valid := en && !io.flush
 
-    io.readMeta.en  := io.req.fire || en
-    io.readMeta.set := getSet(Mux(io.req.ready, io.req.bits, io.holdRead))
+    io.readMeta.en  := io.req.fire
+    io.readMeta.set := getSet(io.req.bits)
     io.resp.bits    := io.readMeta.data
   }
 
@@ -310,26 +315,26 @@ object ICache {
           sIgnoreBusResp,
         ),
         sWriteBack    -> Mux(io.req.valid, sSendReadResp, sHandleReq),
-        sSendReadResp -> Mux(!io.req.valid || io.resp.ready, sHandleReq, sSendBusReq),
+        sSendReadResp -> Mux(!io.req.valid || io.resp.ready, sHandleReq, sSendReadResp),
       ),
     )
 
     io.req.ready := MuxLookup(state, false.B)(
       Seq(
-        sHandleReq    -> ((isRead && hit && !cached && io.resp.ready) || isIdxInit || isIdxInv || isHitInv),
+        sHandleReq    -> ((isRead && hit && cached && io.resp.ready) || isIdxInit || isIdxInv || isHitInv),
         sSendReadResp -> io.resp.ready,
       ),
     )
 
     io.resp.valid := MuxLookup(state, false.B)(
       Seq(
-        sHandleReq    -> (io.req.valid && isRead && hit && !cached),
+        sHandleReq    -> (io.req.valid && isRead && hit && cached),
         sSendReadResp -> io.req.valid,
       ),
     )
     io.resp.bits.cached       := cached
     io.resp.bits.set          := set
-    io.resp.bits.way          := Mux(state === sSendReadResp, replacedSel, matched)
+    io.resp.bits.way          := Mux(hit, matched, replacedSel)
     io.resp.bits.uncachedRead := lineData.asUInt
 
     val idxSet = vaddr(blockWidth + setWidth - 1, blockWidth)
@@ -389,12 +394,6 @@ object ICache {
         val way  = Output(UInt(wayWidth.W))
         val data = Input(UInt(blockBits.W))
       }
-      val holdRead = Input(new Bundle {
-        val cached       = Bool()
-        val set          = UInt(setWidth.W)
-        val way          = UInt(wayWidth.W)
-        val uncachedRead = UInt(blockBits.W)
-      })
       val req = Flipped(Decoupled(new Bundle {
         val cached       = Bool()
         val set          = UInt(setWidth.W)
@@ -410,9 +409,13 @@ object ICache {
     io.req.ready  := (nextEn === 0.U) || io.flush
     io.resp.valid := en && !io.flush
 
-    io.readData.en  := io.req.fire || en
-    io.readData.set := Mux(io.req.ready, io.req.bits.set, io.holdRead.set)
-    io.readData.way := Mux(io.req.ready, io.req.bits.way, io.holdRead.way)
-    io.resp.bits    := Mux(io.holdRead.cached, io.readData.data, io.holdRead.uncachedRead)
+    io.readData.en  := io.req.fire
+    io.readData.set := io.req.bits.set
+    io.readData.way := io.req.bits.way
+    io.resp.bits := Mux(
+      RegEnable(io.req.bits.cached, io.req.fire),
+      io.readData.data,
+      RegEnable(io.req.bits.uncachedRead, io.req.fire),
+    )
   }
 }

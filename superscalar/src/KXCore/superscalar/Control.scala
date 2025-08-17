@@ -29,7 +29,27 @@ object EXUType extends ChiselEnum {
   def EXU_DIVU  = EXU_SLTU
   def EXU_MODU  = EXU_OR
 
-  val EXU_CSR = Value("b1111".U)
+  val EXU_LDB  = EXU_SLL
+  val EXU_LDH  = EXU_EQ
+  val EXU_LDBU = EXU_SRL
+  val EXU_LDHU = EXU_SRA
+  val EXU_LDW  = EXU_NEQ
+  val EXU_STB  = EXU_SUB
+  val EXU_STH  = EXU_SLT
+  val EXU_STW  = EXU_SLTU
+
+  val EXU_CPUCFG  = EXU_SLL
+  val EXU_TLBWR   = EXU_EQ
+  val EXU_TLBFILL = EXU_SRL
+  val EXU_INVTLB  = EXU_SRA
+  val EXU_RDCNTID = EXU_NEQ
+  val EXU_RDCNTVL = EXU_ADD
+  val EXU_RDCNTVH = EXU_XOR
+  val EXU_CSRRD   = EXU_AND
+  val EXU_CSRXCHG = EXU_SUB
+  val EXU_CSRWR   = EXU_SLT
+  val EXU_TLBSRCH = EXU_SLTU
+  val EXU_TLBRD   = EXU_OR
 
   def isSub(cmd: UInt)           = cmd(3)
   def isCmp(cmd: UInt)           = cmd(3) & (cmd(0) ^ cmd(1))
@@ -40,34 +60,8 @@ object EXUType extends ChiselEnum {
   def shiftArith(cmd: UInt)      = cmd(0)
   def mul_divUnsigned(cmd: UInt) = cmd(1)
   def ismulh_mod(cmd: UInt)      = cmd(0)
-  def isCSR(cmd: UInt)           = cmd.andR
-  def isMul(cmd: UInt)           = !cmd(3)
-  def isDiv(cmd: UInt)           = cmd(3) & !isCSR(cmd)
-
-}
-
-object LSUType extends ChiselEnum {
-  val LSU_STB  = Value("b000".U)
-  val LSU_STH  = Value("b001".U)
-  val LSU_STW  = Value("b010".U)
-  val LSU_LDW  = Value("b011".U)
-  val LSU_LDB  = Value("b100".U)
-  val LSU_LDH  = Value("b101".U)
-  val LSU_LDBU = Value("b110".U)
-  val LSU_LDHU = Value("b111".U)
-
-  def isUnsinged(cmd: UInt) = cmd(1)
-  def isStore(cmd: UInt)    = !cmd(2) && !(cmd(0) && cmd(1))
-}
-
-object CSRType extends ChiselEnum {
-  val XCHG               = Value("b000".U)
-  val RW                 = Value("b001".U)
-  val RDCNTID            = Value("b100".U)
-  val RDCNTVL            = Value("b101".U)
-  val RDCNTVH            = Value("b110".U)
-  val RD                 = Value("b111".U)
-  def isWrite(cmd: UInt) = !cmd(2)
+  def csrWen(cmd: UInt)          = cmd(3)
+  def isSotre(cmd: UInt)         = cmd(3)
 }
 
 // RS1 Operand Select Signal

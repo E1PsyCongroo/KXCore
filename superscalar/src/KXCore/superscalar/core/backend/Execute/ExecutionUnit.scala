@@ -9,6 +9,7 @@ import KXCore.common.peripheral._
 import KXCore.superscalar._
 import KXCore.superscalar.core._
 import KXCore.superscalar.core.frontend._
+import EXUType._
 
 abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   def fu_types: UInt = 0.U(FUType.getWidth.W)
@@ -67,7 +68,6 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
 class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   import params.{commonParams, axiParams}
   import commonParams.{dataWidth, vaddrWidth, paddrWidth}
-  import LSUType._
   override def fu_types: UInt = FUType.FUT_MEM.asUInt
   override def nReaders       = 2
 
@@ -77,28 +77,28 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val io_dtlb_resp = IO(Input(new TLBResp()(commonParams)))
   val io_axi       = IO(new AXIBundle(params.axiParams))
 
-  val s1_isWrite   = isStore(s1_uop.bits.lsuCmd)
+  val s1_isWrite   = EXUType.isSotre(s1_uop.bits.exuCmd)
   val s1_vaddr     = s1_regs.bits(0) + s1_uop.bits.imm
   val s1_writeData = s1_regs.bits(1) << (s1_vaddr(1, 0) ## 0.U(3.W))
   val s1_paddr     = io_dtlb_resp.paddr
-  val s1_wmask = MuxLookup(s1_uop.bits.lsuCmd, 0.U)(
+  val s1_wmask = MuxLookup(s1_uop.bits.exuCmd, 0.U)(
     Seq(
-      LSU_STB.asUInt -> ("b0001".U << s1_vaddr(1, 0)),
-      LSU_STH.asUInt -> ("b0011".U << s1_vaddr(1, 0)),
-      LSU_STW.asUInt -> "b1111".U,
+      EXU_STB.asUInt -> ("b0001".U << s1_vaddr(1, 0)),
+      EXU_STH.asUInt -> ("b0011".U << s1_vaddr(1, 0)),
+      EXU_STW.asUInt -> "b1111".U,
     ),
   )
   val s1_isAle = (s1_vaddr &
-    MuxLookup(s1_uop.bits.lsuCmd, 0.U)(
+    MuxLookup(s1_uop.bits.exuCmd, 0.U)(
       Seq(
-        LSU_STB.asUInt  -> 0.U,
-        LSU_STH.asUInt  -> 1.U,
-        LSU_STW.asUInt  -> 3.U,
-        LSU_LDB.asUInt  -> 0.U,
-        LSU_LDBU.asUInt -> 0.U,
-        LSU_LDH.asUInt  -> 1.U,
-        LSU_LDHU.asUInt -> 1.U,
-        LSU_LDW.asUInt  -> 3.U,
+        EXU_STB.asUInt  -> 0.U,
+        EXU_STH.asUInt  -> 1.U,
+        EXU_STW.asUInt  -> 3.U,
+        EXU_LDB.asUInt  -> 0.U,
+        EXU_LDBU.asUInt -> 0.U,
+        EXU_LDH.asUInt  -> 1.U,
+        EXU_LDHU.asUInt -> 1.U,
+        EXU_LDW.asUInt  -> 3.U,
       ),
     )) =/= 0.U
   val s1_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
@@ -229,11 +229,11 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val rdata = MuxCase(
     lshift,
     Seq(
-      LSU_LDB  -> Fill(24, lshift(7)) ## lshift(7, 0),
-      LSU_LDH  -> Fill(16, lshift(15)) ## lshift(15, 0),
-      LSU_LDHU -> Fill(16, 0.U(1.W)) ## lshift(15, 0),
-      LSU_LDBU -> Fill(24, 0.U(1.W)) ## lshift(7, 0),
-    ).map { case (key, data) => (s2_data.bits.uop.lsuCmd === key.asUInt, data) },
+      EXU_LDB  -> Fill(24, lshift(7)) ## lshift(7, 0),
+      EXU_LDH  -> Fill(16, lshift(15)) ## lshift(15, 0),
+      EXU_LDHU -> Fill(16, 0.U(1.W)) ## lshift(15, 0),
+      EXU_LDBU -> Fill(24, 0.U(1.W)) ## lshift(7, 0),
+    ).map { case (key, data) => (s2_data.bits.uop.exuCmd === key.asUInt, data) },
   )
 
   io_mem_resp.valid := !io_kill && ((state === sWaitResp) &&
@@ -244,11 +244,11 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_mem_resp.bits.uop.debug.wen        := io_mem_resp.bits.uop.ldst =/= 0.U
   io_mem_resp.bits.uop.debug.wdest      := io_mem_resp.bits.uop.ldst
   io_mem_resp.bits.uop.debug.wdata      := io_mem_resp.bits.data
-  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(LSU_LDB, LSU_LDBU, LSU_LDH, LSU_LDHU, LSU_LDW).map(_.asUInt === io_mem_resp.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop.debug.load       := VecInit(Seq(EXU_LDB, EXU_LDBU, EXU_LDH, EXU_LDHU, EXU_LDW).map(_.asUInt === io_mem_resp.bits.uop.exuCmd)).asUInt
   io_mem_resp.bits.uop.debug.loadVaddr  := s2_data.bits.vaddr
   io_mem_resp.bits.uop.debug.loadPaddr  := s2_data.bits.paddr
   io_mem_resp.bits.uop.debug.loadData   := rdata
-  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(LSU_STB, LSU_STH, LSU_STW).map(_.asUInt === io_mem_resp.bits.uop.lsuCmd)).asUInt
+  io_mem_resp.bits.uop.debug.store      := VecInit(Seq(EXU_STB, EXU_STH, EXU_STW).map(_.asUInt === io_mem_resp.bits.uop.exuCmd)).asUInt
   io_mem_resp.bits.uop.debug.storeVaddr := s2_data.bits.vaddr
   io_mem_resp.bits.uop.debug.storePaddr := s2_data.bits.paddr
   io_mem_resp.bits.uop.debug.storeData := s2_data.bits.writeData & (VecInit(
@@ -420,6 +420,7 @@ class UniqueExeUnit(
 
   import params.{commonParams}
   import commonParams.{dataWidth}
+
   override def fu_types: UInt =
     (if (hasCSR) FUType.FUT_CSR.asUInt else 0.U) |
       (if (hasMul) FUType.FUT_MUL.asUInt else 0.U) |
@@ -452,7 +453,7 @@ class UniqueExeUnit(
     mulUnit.io.req.bits.uop      := s1_uop.bits
     mulUnit.io.req.bits.ftq_info := DontCare
     mulUnit.io.req.valid         := false.B
-    when(s1_uop.valid && s1_regs.valid && EXUType.isMul(s1_uop.bits.exuCmd)) {
+    when(s1_uop.valid && s1_regs.valid && s1_uop.bits.fuType === FUType.FUT_MUL.asUInt) {
       mulUnit.io.req.valid := true.B
       s1_uop.ready         := mulUnit.io.req.ready
       s1_regs.ready        := mulUnit.io.req.ready
@@ -480,7 +481,7 @@ class UniqueExeUnit(
     divUnit.io.req.bits.uop      := s1_uop.bits
     divUnit.io.req.bits.ftq_info := DontCare
     divUnit.io.req.valid         := false.B
-    when(s1_uop.valid && s1_regs.valid && EXUType.isDiv(s1_uop.bits.exuCmd)) {
+    when(s1_uop.valid && s1_regs.valid && s1_uop.bits.fuType === FUType.FUT_DIV.asUInt) {
       divUnit.io.req.valid := true.B
       s1_regs.ready        := divUnit.io.req.ready
       s1_uop.ready         := divUnit.io.req.ready
@@ -499,6 +500,8 @@ class UniqueExeUnit(
   }
 
   val (io_csr_access, io_csr_resp, io_csr_xcep) = if (hasCSR) {
+    val cpuinfo = Module(new CPUInfo)
+
     val io_csr_access = IO(new Bundle {
       val raddr = Output(UInt(14.W))       // CSR address to read
       val rdata = Input(UInt(dataWidth.W)) // CSR read data
@@ -515,10 +518,12 @@ class UniqueExeUnit(
     val io_csr_resp = IO(Output(Valid(new ExeUnitResp)))
     val io_csr_xcep = IO(Output(Valid(new MicroOp)))
 
+    cpuinfo.io.idx := s1_regs.bits(0)
+
     io_csr_access.raddr := s1_uop.bits.imm
     io_csr_access.waddr := s1_uop.bits.imm
     io_csr_access.wmask := Mux(
-      s1_uop.bits.csrCmd === CSRType.XCHG.asUInt,
+      s1_uop.bits.exuCmd === EXU_CSRXCHG.asUInt,
       s1_regs.bits(0),
       Fill(dataWidth, 1.B),
     )
@@ -529,28 +534,29 @@ class UniqueExeUnit(
     io_csr_resp.bits  := DontCare
     io_csr_xcep.valid := false.B
     io_csr_xcep       := DontCare
-    when(s1_uop.valid && s1_regs.valid && EXUType.isCSR(s1_uop.bits.exuCmd)) {
+    when(s1_uop.valid && s1_regs.valid && s1_uop.bits.fuType === FUType.FUT_CSR.asUInt) {
       s1_regs.ready        := true.B
       s1_uop.ready         := true.B
-      io_csr_access.we     := CSRType.isWrite(s1_uop.bits.csrCmd)
+      io_csr_access.we     := EXUType.csrWen(s1_uop.bits.exuCmd)
       io_csr_resp.valid    := true.B
       io_csr_resp.bits.uop := s1_uop.bits
-      io_csr_resp.bits.data := MuxLookup(s1_uop.bits.csrCmd, io_csr_access.rdata)(
+      io_csr_resp.bits.data := MuxLookup(s1_uop.bits.exuCmd, io_csr_access.rdata)(
         Seq(
-          CSRType.RDCNTID.asUInt -> io_csr_access.counterID,
-          CSRType.RDCNTVL.asUInt -> io_csr_access.cntvl,
-          CSRType.RDCNTVH.asUInt -> io_csr_access.cntvh,
+          EXU_CPUCFG.asUInt  -> cpuinfo.io.info,
+          EXU_RDCNTID.asUInt -> io_csr_access.counterID,
+          EXU_RDCNTVL.asUInt -> io_csr_access.cntvl,
+          EXU_RDCNTVH.asUInt -> io_csr_access.cntvh,
         ),
       )
     }
 
-    io_csr_resp.bits.uop.debug.is_CNTinst := Seq(CSRType.RDCNTID, CSRType.RDCNTVL, CSRType.RDCNTVH).map(_.asUInt === io_csr_resp.bits.uop.csrCmd).reduce(_ || _)
+    io_csr_resp.bits.uop.debug.is_CNTinst     := Seq(EXU_RDCNTID, EXU_RDCNTVL, EXU_RDCNTVH).map(_.asUInt === io_csr_resp.bits.uop.exuCmd).reduce(_ || _)
     io_csr_resp.bits.uop.debug.timer_64_value := io_csr_access.cntvh ## io_csr_access.cntvl
     io_csr_resp.bits.uop.debug.wen            := io_csr_resp.bits.uop.ldst =/= 0.U
     io_csr_resp.bits.uop.debug.wdest          := io_csr_resp.bits.uop.ldst
     io_csr_resp.bits.uop.debug.wdata          := io_csr_resp.bits.data
-    io_csr_resp.bits.uop.debug.csr_rstat := Seq(CSRType.RD, CSRType.RW, CSRType.XCHG)
-      .map(_.asUInt === io_csr_resp.bits.uop.csrCmd)
+    io_csr_resp.bits.uop.debug.csr_rstat := Seq(EXU_CSRRD, EXU_CSRWR, EXU_CSRXCHG)
+      .map(_.asUInt === io_csr_resp.bits.uop.exuCmd)
       .reduce(_ || _) && io_csr_resp.bits.uop.imm === CSRAddr.ESTAT.U
     io_csr_resp.bits.uop.debug.csr_data := io_csr_resp.bits.data
 

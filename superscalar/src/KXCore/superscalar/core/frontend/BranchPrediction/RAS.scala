@@ -22,7 +22,8 @@ class RAS(implicit params: CoreParameters) extends Module {
     }
   })
 
-  val ras = Reg(Vec(rasNum, UInt(vaddrWidth.W)))
+  // val ras = Vec(rasNum, UInt(vaddrWidth.W))
+  val ras = RegInit(VecInit(Seq.fill(rasNum)(0.U(vaddrWidth.W))))
 
   io.read.addr := Mux(io.write.valid && io.write.idx === io.read.idx, io.write.addr, ras(io.read.idx))
 

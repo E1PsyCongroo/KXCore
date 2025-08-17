@@ -58,8 +58,11 @@ class IssueUnitCollapsing(issueParams: IssueParams)(implicit params: CoreParamet
   // Dispatch/Entry Logic
   // did we find a spot to slide the new dispatched uops into?
 
-  val will_be_available = (issue_slots zip issue_slots_will_be_valid)
-    .map { case (slot, will_be_valid) => !will_be_valid || slot.clear || !slot.valid }
+  val will_be_available = RegNext(
+    VecInit((issue_slots zip issue_slots_will_be_valid).map { case (slot, will_be_valid) =>
+      (!will_be_valid || slot.clear) && !slot.in_uop.valid
+    }),
+  )
   val num_available = PopCount(will_be_available)
   for (w <- 0 until dispatchWidth) {
     io.dis_uops(w).ready := num_available > w.U
