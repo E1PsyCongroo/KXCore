@@ -39,12 +39,17 @@ object EXUType extends ChiselEnum {
   val EXU_STW  = EXU_SLTU
 
   val EXU_CPUCFG  = EXU_SLL
-  val EXU_RDCNTID = EXU_EQ
-  val EXU_RDCNTVL = EXU_SRL
-  val EXU_RDCNTVH = EXU_SRA
-  val EXU_CSRRD   = EXU_NEQ
+  val EXU_TLBWR   = EXU_EQ
+  val EXU_TLBFILL = EXU_SRL
+  val EXU_INVTLB  = EXU_SRA
+  val EXU_RDCNTID = EXU_NEQ
+  val EXU_RDCNTVL = EXU_ADD
+  val EXU_RDCNTVH = EXU_XOR
+  val EXU_CSRRD   = EXU_AND
   val EXU_CSRXCHG = EXU_SUB
   val EXU_CSRWR   = EXU_SLT
+  val EXU_TLBSRCH = EXU_SLTU
+  val EXU_TLBRD   = EXU_OR
 
   def isSub(cmd: UInt)           = cmd(3)
   def isCmp(cmd: UInt)           = cmd(3) & (cmd(0) ^ cmd(1))

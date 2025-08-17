@@ -55,6 +55,7 @@ class Core(implicit params: CoreParameters) extends Module {
   tlb.io.transReq0          := frontend.io.itlbReq
   tlb.io.transReq1          := backend.io.dtlbReq
   tlb.io.cmd_in.cmd         := 0.U.asTypeOf(tlb.io.cmd_in.cmd)
+  tlb.io.cmd_in.cmd.cmd     := TLBCmd.CMD_NONE.asUInt
   tlb.io.cmd_in.estat_ecode := csr.io.ecode
   tlb.io.cmd_in.inv_op      := DontCare
 
