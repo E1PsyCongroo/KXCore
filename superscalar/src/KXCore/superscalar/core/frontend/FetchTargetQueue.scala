@@ -15,7 +15,7 @@ import KXCore.superscalar.core.backend._
 class FetchTargetQueue(implicit params: CoreParameters) extends Module {
   import params.{commonParams, frontendParams, backendParams}
   import commonParams.{vaddrWidth}
-  import frontendParams.{ftqNum, ftqIdxWidth}
+  import frontendParams.{rasNum, ftqNum, ftqIdxWidth}
   import backendParams.{coreWidth}
 
   val io = IO(new Bundle {
@@ -36,6 +36,7 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     val resps = Output(Vec(3, new FTQInfo))
 
     val bpuUpdate = Output(new BranchPredictionUpdate)
+    val rasUpdate = Valid(UInt(log2Ceil(rasNum).W))
   })
 
   val bpu_ptr    = RegInit(0.U(ftqIdxWidth.W))
@@ -53,6 +54,7 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
   when(do_enq) {
     val new_entry = Wire(new FTQBundle)
     new_entry.fetchPC      := io.enq.bits.pc
+    new_entry.rasIdx       := io.enq.bits.rasIdx
     new_entry.brMask       := io.enq.bits.brMask
     new_entry.cfiIdx.valid := io.enq.bits.cfiIdx.valid
     new_entry.cfiIdx.bits  := io.enq.bits.cfiIdx.bits
@@ -73,6 +75,8 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
     maybe_full := false.B
   }
 
+  io.rasUpdate.valid := false.B
+  io.rasUpdate.bits  := DontCare
   val redirect_entry     = WireInit(ram(io.redirect.idx))
   val redirect_new_entry = WireInit(redirect_entry)
   when(io.redirect.valid) {
@@ -86,6 +90,9 @@ class FetchTargetQueue(implicit params: CoreParameters) extends Module {
       redirect_new_entry.cfiIsJirl := io.redirect.brRecovery.cfiIsJirl
     }
     ram(io.redirect.idx) := redirect_new_entry
+
+    io.rasUpdate.valid := true.B
+    io.rasUpdate.bits  := redirect_entry.rasIdx
   }
 
   io.bpuUpdate       := DontCare

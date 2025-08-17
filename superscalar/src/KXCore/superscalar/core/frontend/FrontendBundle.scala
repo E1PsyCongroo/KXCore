@@ -21,6 +21,7 @@ class FetchBundle(implicit params: CoreParameters) extends Bundle {
   val bMask     = UInt(fetchWidth.W)
   val jirlMask  = UInt(fetchWidth.W)
   val cfiIdx    = Valid(UInt(log2Ceil(fetchWidth).W))
+  val rasIdx    = UInt(log2Ceil(rasNum).W)
   val ftqIdx    = UInt(ftqIdxWidth.W)
   val exception = Valid(UInt(ECODE.getWidth.W))
   val bpuMeta = new Bundle {
@@ -74,8 +75,9 @@ class FetchBufferResp(implicit params: CoreParameters) extends Bundle {
 class FTQBundle(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams, frontendParams}
   import commonParams.{vaddrWidth}
-  import frontendParams.{fetchWidth}
+  import frontendParams.{fetchWidth, rasNum}
   val fetchPC   = UInt(vaddrWidth.W)
+  val rasIdx    = UInt(log2Ceil(rasNum).W)
   val brMask    = UInt(fetchWidth.W)
   val cfiIdx    = Valid(UInt(log2Ceil(fetchWidth).W))
   val cfiIsB    = Bool()
