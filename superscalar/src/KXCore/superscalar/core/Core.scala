@@ -74,7 +74,6 @@ class Core(implicit params: CoreParameters) extends Module {
 
   csr.io.epc                   := backend.io.csr_access.epc
   csr.io.ecode                 := backend.io.csr_access.ecode
-  csr.io.ecode_sub             := backend.io.csr_access.ecode_sub
   csr.io.badv                  := backend.io.csr_access.badv
   csr.io.excp_en               := backend.io.csr_access.excp_en
   backend.io.csr_access.eentry := csr.io.eentry

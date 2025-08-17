@@ -42,11 +42,10 @@ class RoBExceptionIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams}
   import commonParams.{vaddrWidth}
 
-  val valid     = Bool()
-  val epc       = UInt(vaddrWidth.W) // pc for exception handling
-  val ecode     = UInt(6.W)          // exception code
-  val ecode_sub = UInt(9.W)
-  val badv      = UInt(vaddrWidth.W) // bad virtual address for exception about addr
+  val valid = Bool()
+  val epc   = UInt(vaddrWidth.W)     // pc for exception handling
+  val ecode = UInt(ECODE.getWidth.W) // exception code
+  val badv  = UInt(vaddrWidth.W)     // bad virtual address for exception about addr
   val debug = new Bundle {
     val exceptionPC   = UInt(32.W)
     val exceptionInst = UInt(32.W)
@@ -315,11 +314,10 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   )
   io.ertn := will_redirect && rob_redirect_info.isErtn && !will_throw_xcep
 
-  io.exception.valid     := will_throw_xcep
-  io.exception.epc       := redirect_uop_pc
-  io.exception.ecode     := ECODE.getEcode(rob_xcep_info.ecode)
-  io.exception.ecode_sub := ECODE.getEsubCode(rob_xcep_info.ecode)
-  io.exception.badv      := rob_xcep_info.badv
+  io.exception.valid := will_throw_xcep
+  io.exception.epc   := redirect_uop_pc
+  io.exception.ecode := rob_xcep_info.ecode
+  io.exception.badv  := rob_xcep_info.badv
 
   io.exception.debug.exceptionPC   := io.exception.epc
   io.exception.debug.exceptionInst := redirect_uop.debug.inst

@@ -120,11 +120,11 @@ object Instruction {
   val TLBRD   = Instruction("TLBRD", BitPat("b0000 0110 0100 10000 01011 00000 00000"))
   val TLBWR   = Instruction("TLBWR", BitPat("b0000 0110 0100 10000 01100 00000 00000"))
   val TLBFILL = Instruction("TLBFILL", BitPat("b0000 0110 0100 10000 01101 00000 00000"))
-  val INVTLB  = Instruction("INVTLB", BitPat("b0000 0110 0100 10001 ????? ????? ?????"))
+  val INVTLB  = Instruction("INVTLB", BitPat("b0000 0110 0100 10011 ????? ????? ?????"))
 
   /* Other miscellaneous directives */
   val ERTN   = Instruction("ERTN", BitPat("b0000 0110 0100 10000 01110 00000 00000"))
-  val IDLE   = Instruction("IDLE", BitPat("b0000 0110 0100 10011 ????? ????? ?????"))
+  val IDLE   = Instruction("IDLE", BitPat("b0000 0110 0100 10001 ????? ????? ?????"))
   val CPUCFG = Instruction("CPUCFG", BitPat("b0000 0000 0000 00000 11011 ????? ?????"))
 }
 
@@ -142,8 +142,8 @@ object Privilege {
   }
 
   object ECODE extends ChiselEnum {
-    def getEcode(e: UInt)    = e(4, 0)
-    def getEsubCode(e: UInt) = e(5)
+    def getEcode(e: UInt)    = e(5, 0)
+    def getEsubCode(e: UInt) = e(6)
 
     val INT  = Value(0x00.U)
     val PIL  = Value(0x01.U)
@@ -213,6 +213,11 @@ object Privilege {
       def set_da(da: Bool): CRMD = {
         val write_mask = 0x8.U(32.W)
         ((value & ~write_mask) | (da.asUInt << 3)).asTypeOf(this)
+      }
+
+      def set_pg(pg: Bool): CRMD = {
+        val write_mask = 0x10.U(32.W)
+        ((value & ~write_mask) | (pg.asUInt << 4)).asTypeOf(this)
       }
 
       def set_plv(plv: UInt): CRMD = {

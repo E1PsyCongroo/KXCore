@@ -84,7 +84,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   val s0_fetchPC   = Wire(UInt(vaddrWidth.W))
   val s0_npc       = RegInit(pcReset.U)
   val s0_cacop     = WireInit(icacheArb.io.out.bits.cacop)
-  val s0_cached    = true.B // io.itlbResp.mat(0)
+  val s0_cached    = io.itlbResp.mat(0)
   val s0_paddr     = io.itlbResp.paddr
   val s0_isAdef    = Wire(Bool())
   val s0_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
@@ -252,9 +252,12 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   def isJIRL(inst: UInt): Bool = {
     inst === Instruction.JIRL.inst
   }
+  def isIDLE(inst: UInt): Bool = {
+    inst === Instruction.IDLE.inst
+  }
   def isJmp(inst: UInt): Bool = {
     import Instruction._
-    isB(inst) || isJIRL(inst)
+    isB(inst) || isJIRL(inst) || isIDLE(inst)
   }
   def isCall(inst: UInt): Bool = {
     import Instruction._
@@ -282,6 +285,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   val s2_brMask         = VecInit(s2_fetchBundle.insts.map(isBr(_))).asUInt
   val s2_bMask          = VecInit(s2_fetchBundle.insts.map(isB(_))).asUInt
   val s2_jirlMask       = VecInit(s2_fetchBundle.insts.map(isJIRL(_))).asUInt
+  val s2_idleMask       = VecInit(s2_fetchBundle.insts.map(isIDLE(_))).asUInt
   val s2_jmpMask        = VecInit(s2_fetchBundle.insts.map(isJmp(_))).asUInt
   val s2_callMask       = VecInit(s2_fetchBundle.insts.map(isCall(_))).asUInt
   val s2_retMask        = VecInit(s2_fetchBundle.insts.map(isRet(_))).asUInt
@@ -337,14 +341,15 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   stage2Redirect.bits := MuxCase(
     s2_pcs(fetchWidth),
     Seq(
-      !s2_cfiMask.orR        -> s2_pcs(fetchWidth),
-      s2_retMask(s2_cfiIdx)  -> ras.io.read.addr,
-      s2_jirlMask(s2_cfiIdx) -> s2_bpuResp.pred(s2_cfiIdx).target.bits,
+      !s2_cfiMask.orR       -> s2_pcs(fetchWidth),
+      s2_retMask(s2_cfiIdx) -> ras.io.read.addr,
       s2_bMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(
         Cat(s2_fetchBundle.insts(s2_cfiIdx)(9, 0), s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)),
         32,
       )),
-      s2_brMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(Cat(s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)), 32)),
+      s2_brMask(s2_cfiIdx)   -> (s2_pcs(s2_cfiIdx) + Sext(Cat(s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)), 32)),
+      s2_jirlMask(s2_cfiIdx) -> s2_bpuResp.pred(s2_cfiIdx).target.bits,
+      s2_idleMask(s2_cfiIdx) -> s2_pcs(s2_cfiIdx),
     ),
   )
 

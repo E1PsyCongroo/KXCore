@@ -50,12 +50,11 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
   /* ------ TLB Command ------ */
 
   /* ------ Exception Enter ------ */
-  val epc       = Input(UInt(vaddrWidth.W)) // Program counter for exception handling
-  val ecode     = Input(UInt(6.W))          // Exception code
-  val ecode_sub = Input(UInt(9.W))
-  val badv      = Input(UInt(vaddrWidth.W)) // Bad virtual address for exception
-  val excp_en   = Input(Bool())             // Exception enable
-  val eentry    = Output(UInt(32.W))        // Exception entry address
+  val epc     = Input(UInt(vaddrWidth.W))     // Program counter for exception handling
+  val ecode   = Input(UInt(ECODE.getWidth.W)) // Exception code
+  val badv    = Input(UInt(vaddrWidth.W))     // Bad virtual address for exception
+  val excp_en = Input(Bool())                 // Exception enable
+  val eentry  = Output(UInt(32.W))            // Exception entry address
   /* ------ Exception Enter ------ */
 
   /* ------ Exception Return ------ */
@@ -162,16 +161,23 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   /* ------ Stable Counter ------ */
 
   /* ------ Exception Enter ------ */
-  val excp_crmd  = crmd.set_ie(false.B).set_plv(0.U(2.W))
+  val excp_crmd = Mux(
+    io.ecode === ECODE.TLBR.asUInt,
+    crmd.set_ie(0.B).set_plv(0.U(2.W)).set_da(1.B).set_pg(0.B),
+    crmd.set_ie(0.B).set_plv(0.U(2.W)),
+  )
   val excp_prmd  = prmd.set_pie(crmd.ie).set_pplv(crmd.plv)
-  val excp_estat = estat.set_ecode(io.ecode).set_sub_ecode(io.ecode_sub)
+  val excp_estat = estat.set_ecode(ECODE.getEcode(io.ecode)).set_sub_ecode(ECODE.getEsubCode(io.ecode))
 
   io.eentry := Mux(io.ecode === ECODE.TLBR.asUInt, tlbrentry.value, eentry.value)
   /* ------ Exception Enter ------ */
 
   /* ------ Exception Return ------ */
-  val eret_crmd = crmd.set_ie(prmd.pie).set_plv(prmd.pplv)
-  val eret_prmd = prmd.set_pie(false.B).set_pplv(0.U(2.W))
+  val eret_crmd = Mux(
+    (estat.sub_ecode ## estat.ecode) === ECODE.TLBR.asUInt,
+    crmd.set_ie(prmd.pie).set_plv(prmd.pplv).set_da(0.B).set_pg(1.B),
+    crmd.set_ie(prmd.pie).set_plv(prmd.pplv),
+  )
 
   io.era := era
   /* ------ Exception Return ------ */
@@ -182,11 +188,12 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
   /* ------ Write Logic ------ */
   when(io.excp_en) {
-    crmd  := excp_crmd
-    prmd  := excp_prmd
-    estat := excp_estat
-    badv  := Mux(Seq(TLBR, ADEF, ALE, PIL, PIS, PIF, PME, PPI).map(e => ECODE.getEcode(e.asUInt) === io.ecode).reduce(_ || _), io.badv, badv)
-    era   := io.epc
+    crmd         := excp_crmd
+    prmd         := excp_prmd
+    estat        := excp_estat
+    badv         := Mux(Seq(TLBR, ADEF, ALE, PIL, PIS, PIF, PME, PPI).map(e => ECODE.getEcode(e.asUInt) === io.ecode).reduce(_ || _), io.badv, badv)
+    era          := io.epc
+    tlbehi.value := Mux(Seq(PIL, PIS, PIF, PME, PPI, TLBR).map(e => ECODE.getEcode(e.asUInt) === io.ecode).reduce(_ || _), tlbehi.write(io.badv), tlbehi.value)
   }.elsewhen(io.eret_en) {
     crmd  := eret_crmd
     klo   := false.B

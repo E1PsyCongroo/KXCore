@@ -641,12 +641,14 @@ class UniqueExeUnit(
     io_csr_access.wdata := s1_regs.bits(1)
     io_csr_access.we    := false.B
 
-    io_tlb_cmd.cmd    := EXU_TLBNONE.asUInt
-    io_tlb_cmd.invOp  := s1_uop.bits.imm(4, 0)
-    io_csr_resp.valid := false.B
-    io_csr_resp.bits  := DontCare
-    io_csr_xcep.valid := false.B
-    io_csr_xcep       := DontCare
+    io_tlb_cmd.cmd       := EXU_TLBNONE.asUInt
+    io_tlb_cmd.inv_op    := s1_uop.bits.imm(4, 0)
+    io_tlb_cmd.inv_asid  := s1_regs.bits(0)(9, 0)
+    io_tlb_cmd.inv_vaddr := s1_regs.bits(1)
+    io_csr_resp.valid    := false.B
+    io_csr_resp.bits     := DontCare
+    io_csr_xcep.valid    := false.B
+    io_csr_xcep          := DontCare
     when(s1_uop.valid && s1_regs.valid && s1_uop.bits.fuType === FUType.FUT_CSR.asUInt) {
       s1_regs.ready        := true.B
       s1_uop.ready         := true.B

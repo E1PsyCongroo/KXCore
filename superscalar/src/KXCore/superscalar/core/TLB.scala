@@ -63,14 +63,16 @@ class TLBEntry(implicit params: CoreParameters) extends Bundle {
   val item   = Vec(2, new TLBTranslateItem)
   val e      = Bool()
 
-  def page_size(): UInt = {
+  def page_size: UInt = {
     Mux(ps, 21.U, 12.U) // 2M or 4K
   }
 }
 
 class TLBCmdIO(implicit params: CoreParameters) extends Bundle {
-  val cmd   = UInt(EXUType.getWidth.W)
-  val invOp = UInt(5.W) // TLB invalidate operation
+  val cmd       = UInt(EXUType.getWidth.W)
+  val inv_op    = UInt(5.W) // TLB invalidate operation
+  val inv_asid  = UInt(10.W)
+  val inv_vaddr = UInt(params.commonParams.vaddrWidth.W)
 }
 
 class TLB(implicit params: CoreParameters) extends Module {
@@ -113,49 +115,33 @@ class TLB(implicit params: CoreParameters) extends Module {
   def tlb_translate(req: TLBReq, is_fetch: Boolean): TLBResp = {
     val vaddr = req.vaddr
 
-    val dmw_hits = Wire(Vec(2, Bool()))
-    for (i <- 0 until 2) {
-      val dmw = io.mode.dmw(i)
-      dmw_hits(i) := (dmw.plv0 && io.mode.crmd.plv === 0.U) || (dmw.plv3 && io.mode.crmd.plv === 3.U) ||
-        (dmw.vseg === req.vaddr(31, 29))
+    val dmw_hits = io.mode.dmw.map { d =>
+      ((d.plv0 && io.mode.crmd.plv === 0.U) || (d.plv3 && io.mode.crmd.plv === 3.U)) && d.vseg === req.vaddr(31, 29)
     }
-    val dmw_hit = dmw_hits.asUInt.orR
-    val dmw_paddr = MuxLookup(dmw_hits.asUInt, 0.U)(
-      Seq(
-        1.U -> Cat(io.mode.dmw(0).pseg, vaddr(28, 0)), // DMW0
-        3.U -> Cat(io.mode.dmw(1).pseg, vaddr(28, 0)), // DMW1
-      ),
-    )
-    val dmw_mat = MuxLookup(dmw_hits.asUInt, 0.U)(
-      Seq(
-        1.U -> io.mode.dmw(0).mat, // DMW0
-        3.U -> io.mode.dmw(1).mat, // DMW1
-      ),
-    )
+    val dmw_hit   = dmw_hits.reduce(_ || _)
+    val dmw_paddr = PriorityMux(dmw_hits, io.mode.dmw).pseg ## vaddr(28, 0)
+    val dmw_mat   = PriorityMux(dmw_hits, io.mode.dmw).mat
 
-    val tlb_hits = Wire(Vec(tlbNum, Bool()))
-    for (i <- 0 until tlbNum) {
-      val entry = tlbEntry(i)
-      tlb_hits(i) := (entry.vppn === req.vaddr(vaddrWidth - 1, 13)) &&
-        ((entry.asid === io.mode.asid.asid) || entry.global) &&
-        (entry.e)
-    }
-    val isHit = tlb_hits.asUInt.orR
+    val tlb_hits = tlbEntry.map(entry =>
+      (entry.e) && (entry.vppn === req.vaddr(vaddrWidth - 1, 13)) &&
+        ((entry.asid === io.mode.asid.asid) || entry.global),
+    )
+    val isHit = tlb_hits.reduce(_ || _)
 
     val hitIndex = PriorityEncoder(tlb_hits)
     val hitEntry = tlbEntry(hitIndex)
 
-    val found = Wire(new TLBTranslateItem)
-    found := Mux(vaddr(hitEntry.page_size()) === 0.U, hitEntry.item(0), hitEntry.item(1))
     val found_ps = hitEntry.ps
+    val found    = Wire(new TLBTranslateItem)
+    found := Mux(vaddr(hitEntry.page_size) === 0.U, hitEntry.item(0), hitEntry.item(1))
     val tlb_paddr = Mux(
       found_ps,
-      Cat(found.ppn(paddrWidth - 13, 9), vaddr(8, 0)), // 2M page
-      Cat(found.ppn(paddrWidth - 13, 0), vaddr(11, 0)),// 4K page
+      (found.ppn(paddrWidth - 13, 9) ## vaddr(20, 0)), // 2M page
+      (found.ppn(paddrWidth - 13, 0) ## vaddr(11, 0)), // 4K page
     )
 
-    val tlb_exception_valid = !isHit || !found.valid || io.mode.crmd.plv > found.plv ||
-      (req.isWrite && found.dirty === 0.U) || (is_fetch.B && vaddr(log2Ceil(instBytes), 0) =/= 0.U)
+    val tlb_exception_valid = !isHit || !found.valid || (io.mode.crmd.plv > found.plv) ||
+      (req.isWrite && found.dirty === 0.U)
     val tlb_exception_ecode =
       Mux(
         !isHit,
@@ -168,7 +154,7 @@ class TLB(implicit params: CoreParameters) extends Module {
       ).asUInt
 
     val resp = Wire(new TLBResp)
-    resp.exception.valid := Mux(dmw_hit, false.B, !isHit)
+    resp.exception.valid := Mux(dmw_hit, false.B, tlb_exception_valid)
     resp.exception.bits  := Mux(dmw_hit, 0.U, tlb_exception_ecode)
     resp.mat             := Mux(dmw_hit, dmw_mat, found.mat)
     resp.paddr           := Mux(dmw_hit, dmw_paddr, tlb_paddr)
@@ -185,8 +171,6 @@ class TLB(implicit params: CoreParameters) extends Module {
     resp
   }
 
-  dontTouch(io.transReq0.vaddr)
-
   io.transResp0 := Mux(io.mode.crmd.da && !io.mode.crmd.pg, tlb_translate_direct(io.transReq0, io.mode.crmd.datf, true), tlb_translate(io.transReq0, true))
   io.transResp1 := Mux(io.mode.crmd.da && !io.mode.crmd.pg, tlb_translate_direct(io.transReq1, io.mode.crmd.datm, false), tlb_translate(io.transReq1, false))
 
@@ -196,19 +180,18 @@ class TLB(implicit params: CoreParameters) extends Module {
   for (i <- 0 until tlbNum) {
     val entry = tlbEntry(i)
     srch_hits(i) := (entry.vppn === srch_vppn) &&
-      (entry.asid === io.mode.asid.asid)
+      (entry.asid === io.mode.asid.asid || entry.global)
   }
   val tlbsrch_hit    = srch_hits.reduce(_ || _)
   val tlbsrch_index  = PriorityEncoder(srch_hits)
-  val tlbsrch_tlbidx = !tlbsrch_hit ## io.mode.tlbidx.value(30, log2Ceil(tlbNum)) ## Mux(tlbsrch_hit, io.mode.tlbidx.index, tlbsrch_index)
+  val tlbsrch_tlbidx = !tlbsrch_hit ## io.mode.tlbidx.value(30, log2Ceil(tlbNum)) ## Mux(tlbsrch_hit, tlbsrch_index, io.mode.tlbidx.index)
   /* ------ TLBSRCH ------ */
 
   /* ------ TLBRD ------ */
-  val tlbrd_entry  = tlbEntry(io.mode.tlbidx.index)
-  val tlbrd_tlbehi = Mux(tlbrd_entry.e, 0.U, Cat(tlbrd_entry.vppn, 0.U(12.W)))
-  val tlbrd_tlbrlo0 = Mux(
+  val tlbrd_entry  = WireInit(tlbEntry(io.mode.tlbidx.index))
+  val tlbrd_tlbehi = Mux(tlbrd_entry.e, Cat(tlbrd_entry.vppn, 0.U(13.W)), 0.U)
+  val tlbrd_tlbelo0 = Mux(
     tlbrd_entry.e,
-    0.U,
     Cat(
       0.U((36 - paddrWidth).W),
       tlbrd_entry.item(0).ppn,
@@ -219,10 +202,10 @@ class TLB(implicit params: CoreParameters) extends Module {
       tlbrd_entry.item(0).dirty,
       tlbrd_entry.item(0).valid,
     ),
-  )
-  val tlbrd_tlbrlo1 = Mux(
-    tlbrd_entry.e,
     0.U,
+  )
+  val tlbrd_tlbelo1 = Mux(
+    tlbrd_entry.e,
     Cat(
       0.U((36 - paddrWidth).W),
       tlbrd_entry.item(1).ppn,
@@ -233,17 +216,18 @@ class TLB(implicit params: CoreParameters) extends Module {
       tlbrd_entry.item(1).dirty,
       tlbrd_entry.item(1).valid,
     ),
+    0.U,
   )
   val tlbrd_tlbidx = Mux(
     tlbrd_entry.e,
     0.B ## io.mode.tlbidx.value(30, 0),
-    1.B ## io.mode.tlbidx.value(30, 0),
+    0x80.U(8.W) ## io.mode.tlbidx.value(23, 0),
   )
-  val tlbrd_asid = Mux(tlbrd_entry.e, 0.U, tlbrd_entry.asid)
+  val tlbrd_asid = Mux(tlbrd_entry.e, tlbrd_entry.asid, 0.U)
   /* ------ TLBRD ------ */
 
   /* ------ TLBWR ------ */
-  val tlbwr_entry_e = io.mode.estat.ecode === ECODE.getEcode(ECODE.TLBR.asUInt) || io.mode.tlbidx.ne
+  val tlbwr_entry_e = io.mode.estat.ecode === ECODE.getEcode(ECODE.TLBR.asUInt) || !io.mode.tlbidx.ne
   val tlbwr_index   = io.mode.tlbidx.index
   val cmd_is_tlbwr  = io.tlbCmd.cmd === EXUType.EXU_TLBWR.asUInt
   /* ------ TLBWR ------ */
@@ -276,18 +260,20 @@ class TLB(implicit params: CoreParameters) extends Module {
 
   when(cmd_inv) {
     for (i <- 0 until tlbNum) {
-      val en = MuxLookup(io.tlbCmd.invOp, false.B)(
+      val en = MuxLookup(io.tlbCmd.inv_op, false.B)(
         Seq(
           0.U -> true.B, // invalidate all entries
           1.U -> true.B,
           2.U -> tlbEntry(i).global,
           3.U -> !tlbEntry(i).global,
-          4.U -> (!tlbEntry(i).global && (tlbEntry(i).asid === io.mode.asid.asid)),
-          5.U -> (!tlbEntry(i).global && (tlbEntry(i).asid === io.mode.asid.asid) && (tlbEntry(i).vppn === io.mode.tlbehi.vppn)),
-          6.U -> ((tlbEntry(i).global || (tlbEntry(i).asid === io.mode.asid.asid)) && (tlbEntry(i).vppn === io.mode.tlbehi.vppn)),
+          4.U -> (!tlbEntry(i).global && (tlbEntry(i).asid === io.tlbCmd.inv_asid)),
+          5.U -> (!tlbEntry(i).global && (tlbEntry(i).asid === io.tlbCmd.inv_asid) &&
+            (tlbEntry(i).vppn === (io.tlbCmd.inv_vaddr >> 13))),
+          6.U -> ((tlbEntry(i).global || (tlbEntry(i).asid === io.tlbCmd.inv_asid)) &&
+            (tlbEntry(i).vppn === (io.tlbCmd.inv_vaddr >> 13))),
         ),
       )
-      tlbEntry(i).e := false.B
+      tlbEntry(i).e := Mux(en, false.B, tlbEntry(i).e)
     }
   }.elsewhen(cmd_fill) {
     tlbEntry(0) := fill_entry // for now, only fill the first entry
@@ -338,13 +324,13 @@ class TLB(implicit params: CoreParameters) extends Module {
 
   io.tlbUpdate.new_tlbelo0 := MuxLookup(io.tlbCmd.cmd, io.mode.tlbelo0.value)(
     Seq(
-      EXUType.EXU_TLBSRCH.asUInt -> tlbrd_tlbrlo0,
+      EXUType.EXU_TLBRD.asUInt -> tlbrd_tlbelo0,
     ),
   );
 
   io.tlbUpdate.new_tlbelo1 := MuxLookup(io.tlbCmd.cmd, io.mode.tlbelo1.value)(
     Seq(
-      EXUType.EXU_TLBRD.asUInt -> tlbrd_tlbrlo1,
+      EXUType.EXU_TLBRD.asUInt -> tlbrd_tlbelo1,
     ),
   );
 

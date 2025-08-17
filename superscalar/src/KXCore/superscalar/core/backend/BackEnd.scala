@@ -42,12 +42,11 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
     val cntvh     = Input(UInt(dataWidth.W))
     val cntvl     = Input(UInt(dataWidth.W))
 
-    val epc       = Output(UInt(vaddrWidth.W)) // Program counter for exception handling
-    val ecode     = Output(UInt(6.W))          // Exception code
-    val ecode_sub = Output(UInt(9.W))
-    val badv      = Output(UInt(vaddrWidth.W)) // Bad virtual address for exception
-    val excp_en   = Output(Bool())             // Exception enable
-    val eentry    = Input(UInt(32.W))          // Exception entry address
+    val epc     = Output(UInt(vaddrWidth.W))     // Program counter for exception handling
+    val ecode   = Output(UInt(ECODE.getWidth.W)) // Exception code
+    val badv    = Output(UInt(vaddrWidth.W))     // Bad virtual address for exception
+    val excp_en = Output(Bool())                 // Exception enable
+    val eentry  = Input(UInt(32.W))              // Exception entry address
 
     val eret_en = Output(Bool())            // Exception return enable
     val era     = Input(UInt(vaddrWidth.W)) // Exception return address
@@ -328,12 +327,11 @@ class BackEnd(implicit params: CoreParameters) extends Module {
 
   io.redirect := rob.io.redirect
 
-  io.csr_access.epc       := rob.io.exception.epc
-  io.csr_access.ecode     := rob.io.exception.ecode
-  io.csr_access.ecode_sub := rob.io.exception.ecode_sub
-  io.csr_access.badv      := rob.io.exception.badv
-  io.csr_access.excp_en   := rob.io.exception.valid
-  rob.io.eentry           := io.csr_access.eentry
+  io.csr_access.epc     := rob.io.exception.epc
+  io.csr_access.ecode   := rob.io.exception.ecode
+  io.csr_access.badv    := rob.io.exception.badv
+  io.csr_access.excp_en := rob.io.exception.valid
+  rob.io.eentry         := io.csr_access.eentry
 
   io.csr_access.eret_en := rob.io.ertn
   rob.io.era            := io.csr_access.era
