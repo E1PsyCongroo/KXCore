@@ -97,7 +97,7 @@ class MultiplyUnit(implicit params: CoreParameters) extends FunctionalUnit {
   import params.{commonParams, backendParams}
   import commonParams.{dataWidth}
 
-  // 手动切换是否使用 IP 核
+  // 手动使用乘法器IP
   val multiplier = Module(new WallaceMultiplier(dataWidth, backendParams.mulPipeDepth))
   // val multiplier = Module(new VivadoIPMultiplier(dataWidth, backendParams.mulPipeDepth))
 
@@ -122,7 +122,10 @@ class MultiplyUnit(implicit params: CoreParameters) extends FunctionalUnit {
 }
 
 class DivUnit(implicit params: CoreParameters) extends FunctionalUnit {
+
+  // 手动使用除法器IP
   val divider = Module(new BoothDivider(params.commonParams.dataWidth))
+  // val divider = Module(new VivadoIPDivider(params.commonParams.dataWidth))
 
   val uopReg = RegEnable(io.req.bits.uop, io.req.ready)
 

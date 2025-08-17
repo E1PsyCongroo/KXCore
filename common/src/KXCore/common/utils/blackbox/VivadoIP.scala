@@ -14,7 +14,6 @@ class VivadoMultiplierIP(dwidth: Int, pipeDepth: Int) extends BlackBox {
     })
 }
 
-/*
 class VivadoDividerIP(dwidth: Int) extends BlackBox {
     val io = IO(new Bundle{
         val aclk                      = Input(Clock())
@@ -29,4 +28,3 @@ class VivadoDividerIP(dwidth: Int) extends BlackBox {
         val m_axis_dout_tdata         = Output(UInt((dwidth * 2).W))
     })
 }
-*/
