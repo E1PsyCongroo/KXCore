@@ -264,8 +264,8 @@ class TLB(implicit params: CommonParameters) extends Module {
   /* ------ TLBINV ------ */
 
   /* ------ WRITE TLB ------ */
-  val cmd_inv  = io.cmd_in.inv_op === TLBCmd.CMD_INV.U
-  val cmd_fill = io.cmd_in.inv_op === TLBCmd.CMD_FILL.U
+  val cmd_inv  = io.cmd_in.cmd.cmd === TLBCmd.CMD_INV.U
+  val cmd_fill = io.cmd_in.cmd.cmd === TLBCmd.CMD_FILL.U
   val cmd_wr   = io.cmd_in.cmd.cmd === TLBCmd.CMD_WR.U
 
   val fill_entry = Wire(new TLBEntry)
