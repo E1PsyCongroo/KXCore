@@ -45,8 +45,6 @@ class MicroOp(implicit params: CoreParameters) extends Bundle {
   val ecode         = UInt(ECODE.getWidth.W)
   val badv          = UInt(vaddrWidth.W)
   val exuCmd        = UInt(EXUType.getWidth.W)
-  val csrCmd        = UInt(CSRType.getWidth.W)
-  val lsuCmd        = UInt(LSUType.getWidth.W)
   val isUnique      = Bool() // only allow this instruction in the pipeline, tell ROB to un-ready until empty
   val flushOnCommit = Bool() // some instructions need to flush the pipeline behind them
   val busy          = Bool() // need execute?
