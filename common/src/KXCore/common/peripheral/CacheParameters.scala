@@ -22,6 +22,7 @@ case class CacheParameters(
   val blockWidth: Int = log2Ceil(blockBytes)
   val bankBytes: Int  = blockBytes / nBanks
   val bankBits: Int   = bankBytes * 8
+  val bankWidth: Int  = log2Ceil(bankBytes)
   require(id >= 0 && id < 16)
   require(latency == 2)
   require(setWidth + blockWidth <= 12)
