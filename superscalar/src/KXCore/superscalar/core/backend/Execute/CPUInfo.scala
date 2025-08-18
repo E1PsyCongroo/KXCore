@@ -19,8 +19,8 @@ class CPUInfo(implicit params: CoreParameters) extends Module {
 
   // val cfg0x10 = 0b101.U
   val cfg0x10 = 0b100.U
-  val cfg0x11 = ((icacheParams.nWays - 1) | (icacheParams.bankWidth << 16) | (icacheParams.blockWidth << 24)).U
-  val cfg0x12 = ((dcacheParams.nWays - 1) | (dcacheParams.bankWidth << 16) | (dcacheParams.blockWidth << 24)).U
+  val cfg0x11 = ((icacheParams.nWays - 1) | (icacheParams.setWidth << 16) | (icacheParams.blockWidth << 24)).U
+  val cfg0x12 = ((dcacheParams.nWays - 1) | (dcacheParams.setWidth << 16) | (dcacheParams.blockWidth << 24)).U
 
   io.info := MuxLookup(io.idx, 0.U(32.W))(Seq(
     0x10.U -> cfg0x10,
