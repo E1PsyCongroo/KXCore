@@ -8,6 +8,7 @@ import KXCore.superscalar._
 import KXCore.superscalar.core._
 import ECODE._
 import CSR._
+import dataclass.data
 
 class CSRIO(implicit params: CoreParameters) extends Bundle {
   import params.{commonParams}
@@ -97,6 +98,7 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
     val asid      = UInt(dataWidth.W)
     val pgdl      = UInt(dataWidth.W)
     val pgdh      = UInt(dataWidth.W)
+    val pgd       = UInt(dataWidth.W)
     val cpuid     = UInt(dataWidth.W)
     val saved0    = UInt(dataWidth.W)
     val saved1    = UInt(dataWidth.W)
@@ -130,8 +132,9 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   val tlbelo0   = Reg(new TLBELO(params.commonParams.paddrWidth))
   val tlbelo1   = Reg(new TLBELO(params.commonParams.paddrWidth))
   val asid      = RegInit(0xa0000.U.asTypeOf(new ASID))
-  val pgdl      = WireInit(0.U(32.W))
-  val pgdh      = WireInit(0.U(32.W))
+  val pgdl      = Reg(0.U(32.W))
+  val pgdh      = Reg(0.U(32.W))
+  val pgd       = Reg(0.U(32.W))
   val cpuid     = WireInit(0.U(32.W))
   val saved     = Reg(Vec(4, UInt(32.W)))
   val tid       = Reg(UInt(32.W))
@@ -259,6 +262,10 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
     klo   := Mux(io.waddr === CSRAddr.LLBCTL.U, wdata(2) && io.wmask(2), klo)
     llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1) && io.wmask(1), false.B, llbit)
+
+    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgdh)
+    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgdl)
+    pgd  := Mux(io.waddr === CSRAddr.PGD .U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgd )
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }
@@ -319,6 +326,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   io.debug.asid      := asid.value
   io.debug.pgdl      := pgdl
   io.debug.pgdh      := pgdh
+  io.debug.pgd
   io.debug.cpuid     := cpuid
   io.debug.saved0    := saved(0)
   io.debug.saved1    := saved(1)

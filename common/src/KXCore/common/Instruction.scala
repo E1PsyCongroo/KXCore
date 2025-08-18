@@ -180,6 +180,7 @@ object Privilege {
       val ASID      = 0x018
       val PGDL      = 0x019
       val PGDH      = 0x01a
+      val PGD       = 0x01b
       val CPUID     = 0x020
       val SAVED0    = 0x030
       val SAVED1    = 0x031
