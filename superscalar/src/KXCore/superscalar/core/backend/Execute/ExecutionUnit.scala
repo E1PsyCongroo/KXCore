@@ -27,15 +27,15 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
 
   val iss_uop_ext = ReadyValidIOExpand(io_iss_uop, 3)
 
-  io_read_reqs(0).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy && iss_uop_ext.bits.lrs1 =/= 0.U
+  io_read_reqs(0).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.lrs1 =/= 0.U
   io_read_reqs(0).bits  := iss_uop_ext.bits.prs1
   if (nReaders == 2) {
-    io_read_reqs(1).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy && iss_uop_ext.bits.lrs2 =/= 0.U
+    io_read_reqs(1).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.lrs2 =/= 0.U
     io_read_reqs(1).bits  := iss_uop_ext.bits.prs2
   }
 
   val s0_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  s0_regs.valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.busy &&
+  s0_regs.valid := iss_uop_ext.valid(0) &&
     io_read_reqs.map(req => (!req.valid || req.ready)).reduce(_ && _)
   iss_uop_ext.ready(0) := s0_regs.fire
   s0_regs.bits(0)      := Mux(iss_uop_ext.bits.lrs1 =/= 0.U, io_read_resps(0), 0.U)
@@ -45,7 +45,7 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
 
   val s0_uop = Wire(Decoupled(new MicroOp))
   s0_uop.valid         := iss_uop_ext.valid(1)
-  iss_uop_ext.ready(1) := s0_uop.ready
+  iss_uop_ext.ready(1) := s0_uop.fire
   s0_uop.bits          := iss_uop_ext.bits
 
   s0_uop.bits.debug      := 0.U.asTypeOf(s0_uop.bits.debug.cloneType)
@@ -61,6 +61,7 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   io_fu_types := fu_types
 
   if (params.debug) {
+    dontTouch(iss_uop_ext)
     dontTouch(s0_uop)
     dontTouch(s0_regs)
     dontTouch(s1_uop)
@@ -583,17 +584,17 @@ class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val io_ftq_req  = IO(Vec(2, Decoupled(UInt(params.frontendParams.ftqIdxWidth.W))))
   val io_ftq_resp = IO(Input(Vec(2, new FTQInfo)))
 
-  io_ftq_req(0).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy &&
+  io_ftq_req(0).valid := iss_uop_ext.valid(2) &&
     (iss_uop_ext.bits.op1Sel === OP1Type.OP1_PC.asUInt ||
       iss_uop_ext.bits.isB || iss_uop_ext.bits.isBr || iss_uop_ext.bits.isJirl)
   io_ftq_req(0).bits  := iss_uop_ext.bits.ftqIdx
-  io_ftq_req(1).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy && iss_uop_ext.bits.isJirl
+  io_ftq_req(1).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.isJirl
   io_ftq_req(1).bits  := WrapInc(iss_uop_ext.bits.ftqIdx, params.frontendParams.ftqNum)
   val s0_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  s0_ftq.valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.busy
-  (!io_ftq_req(0).valid || io_ftq_req(0).ready) && (!io_ftq_req(1).valid || io_ftq_req(1).ready)
+  s0_ftq.valid := iss_uop_ext.valid(2) &&
+    (!io_ftq_req(0).valid || io_ftq_req(0).ready) && (!io_ftq_req(1).valid || io_ftq_req(1).ready)
+  iss_uop_ext.ready(2) := s0_ftq.fire
   s0_ftq.bits          := io_ftq_resp
-  iss_uop_ext.ready(2) := s0_ftq.ready
 
   val s1_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
   PipeConnect(Some(io_kill), s0_ftq, s1_ftq)
@@ -622,6 +623,8 @@ class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_alu_brInfo := alu.io.brInfo
 
   if (params.debug) {
+    dontTouch(io_ftq_req)
+    dontTouch(s0_ftq)
     dontTouch(s1_ftq)
   }
 }
