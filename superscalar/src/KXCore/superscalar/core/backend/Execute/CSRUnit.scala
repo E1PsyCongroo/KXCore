@@ -121,7 +121,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
   val crmd      = RegInit(("b1000").U.asTypeOf(new CRMD)) // da=1
   val prmd      = RegInit(0.U.asTypeOf(new PRMD))
-  val euen      = WireInit(0.U(32.W))
+  val euen      = RegInit(0.U(32.W))
   val ecfg      = RegInit(0.U.asTypeOf(new ECFG))
   val estat     = RegInit(0.U.asTypeOf(new ESTAT))
   val era       = Reg(UInt(32.W))
@@ -240,6 +240,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
     crmd.value := Mux(io.waddr === CSRAddr.CRMD.U, crmd.write(wdata | (crmd.value & ~io.wmask)), crmd.value)
     prmd.value := Mux(io.waddr === CSRAddr.PRMD.U, prmd.write(wdata | (prmd.value & ~io.wmask)), prmd.value)
+    euen       := Mux(io.waddr === CSRAddr.EUEN.U, wdata | (euen & ~io.wmask) & ~1.U(32.W), euen)
 
     ecfg.value := Mux(io.waddr === CSRAddr.ECFG.U, ecfg.write(wdata | (ecfg.value & !io.wmask)), ecfg.value)
     estat := Mux(
@@ -263,9 +264,9 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
     klo   := Mux(io.waddr === CSRAddr.LLBCTL.U, wdata(2) && io.wmask(2), klo)
     llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1) && io.wmask(1), false.B, llbit)
 
-    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (tlbelo0.value & ~io.wmask) & ~0xfff.U, pgdh)
-    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (tlbelo0.value & ~io.wmask) & ~0xfff.U, pgdl)
-    pgd  := Mux(io.waddr === CSRAddr.PGD.U, wdata | (tlbelo0.value & ~io.wmask) & ~0xfff.U, pgd)
+    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (pgdh & ~io.wmask) & ~0xfff.U(32.W), pgdh)
+    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (pgdl & ~io.wmask) & ~0xfff.U(32.W), pgdl)
+    pgd  := Mux(io.waddr === CSRAddr.PGD.U, wdata | (pgd & ~io.wmask) & ~0xfff.U(32.W), pgd)
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }

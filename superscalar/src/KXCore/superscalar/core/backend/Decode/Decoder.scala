@@ -429,7 +429,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
         IMMType.IMM_5U  -> inst(14, 10),
         IMMType.IMM_12  -> Sext(inst(21, 10), dataWidth),
         IMMType.IMM_12U -> inst(21, 10),
-        IMMType.IMM_14  -> Sext(inst(23, 10), dataWidth),
+        IMMType.IMM_14  -> Sext(inst(23, 10) ## 0.U(2.W), dataWidth),
         IMMType.IMM_14U -> inst(23, 10),
         IMMType.IMM_15U -> inst(14, 0),
         IMMType.IMM_16  -> Sext((inst(25, 10) ## 0.U(2.W)), dataWidth),
