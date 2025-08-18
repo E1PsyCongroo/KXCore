@@ -263,9 +263,9 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
     klo   := Mux(io.waddr === CSRAddr.LLBCTL.U, wdata(2) && io.wmask(2), klo)
     llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1) && io.wmask(1), false.B, llbit)
 
-    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgdh)
-    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgdl)
-    pgd  := Mux(io.waddr === CSRAddr.PGD .U, wdata | (tlbelo0.value & ~io.wmask) & 0xfff.U, pgd )
+    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (tlbelo0.value & ~io.wmask) & !0xfff.U, pgdh)
+    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (tlbelo0.value & ~io.wmask) & !0xfff.U, pgdl)
+    pgd  := Mux(io.waddr === CSRAddr.PGD .U, wdata | (tlbelo0.value & ~io.wmask) & !0xfff.U, pgd )
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }
@@ -326,7 +326,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   io.debug.asid      := asid.value
   io.debug.pgdl      := pgdl
   io.debug.pgdh      := pgdh
-  io.debug.pgd
+  io.debug.pgd       := pgd
   io.debug.cpuid     := cpuid
   io.debug.saved0    := saved(0)
   io.debug.saved1    := saved(1)
