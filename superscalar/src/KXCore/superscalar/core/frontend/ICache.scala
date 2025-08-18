@@ -23,7 +23,7 @@ object ICache {
 
   def getTag(paddr: UInt)(implicit params: CoreParameters): UInt = {
     import params.{commonParams, frontendParams}
-    import params.commonParams.{paddrWidth}
+    import commonParams.{paddrWidth}
     import frontendParams.icacheParams.{setWidth, blockWidth}
     paddr.head(paddrWidth - setWidth - blockWidth)
   }

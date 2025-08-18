@@ -23,6 +23,7 @@ class MicroOp(implicit params: CoreParameters) extends Bundle {
   val isJirl = Bool()
   val isBr   = Bool()
   val isErtn = Bool()
+  val isIBar = Bool()
 
   val op1Sel = UInt(OP1Type.getWidth.W)
   val op2Sel = UInt(OP2Type.getWidth.W)

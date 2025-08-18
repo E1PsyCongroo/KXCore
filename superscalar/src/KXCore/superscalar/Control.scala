@@ -34,9 +34,12 @@ object EXUType extends ChiselEnum {
   val EXU_LDBU = EXU_SRL
   val EXU_LDHU = EXU_SRA
   val EXU_LDW  = EXU_NEQ
+  val EXU_LLW  = EXU_ADD
+  val EXU_IBAR = EXU_XOR
   val EXU_STB  = EXU_SUB
   val EXU_STH  = EXU_SLT
   val EXU_STW  = EXU_SLTU
+  val EXU_SCW  = EXU_OR
 
   val EXU_CPUCFG  = EXU_SLL
   val EXU_TLBNONE = EXU_SLL
@@ -84,6 +87,7 @@ object IMMType extends ChiselEnum {
   val IMM_5U            = Value
   val IMM_12            = Value
   val IMM_12U           = Value
+  val IMM_14            = Value
   val IMM_14U           = Value
   val IMM_15U           = Value
   val IMM_16            = Value

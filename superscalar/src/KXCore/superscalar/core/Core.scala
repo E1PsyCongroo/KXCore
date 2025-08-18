@@ -88,7 +88,7 @@ class Core(implicit params: CoreParameters) extends Module {
   axiAribter.io.in(1) <> frontend.io.axi
   axiAribter.io.out   <> io.axi
 
-  frontend.io.icacheClear       := false.B
+  frontend.io.icacheClear       := backend.io.icacheClear
   frontend.io.icacheReq.valid   := backend.io.icacheReq.valid
   frontend.io.icacheReq.bits    := backend.io.icacheReq.bits
   frontend.io.itlbResp          := tlb.io.transResp0

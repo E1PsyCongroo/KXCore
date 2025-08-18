@@ -150,14 +150,16 @@ object BTB {
       ebtbs.write(updateSet, io.update.target)
     }
 
-    dontTouch(updateSet)
-    dontTouch(updateWay)
-    dontTouch(updateTag)
-    dontTouch(newOffset)
-    dontTouch(updateBtbData)
-    dontTouch(updateBtbMask)
-    dontTouch(updateMetaData)
-    dontTouch(updateMetaMask)
+    if (params.debug) {
+      dontTouch(updateSet)
+      dontTouch(updateWay)
+      dontTouch(updateTag)
+      dontTouch(newOffset)
+      dontTouch(updateBtbData)
+      dontTouch(updateBtbMask)
+      dontTouch(updateMetaData)
+      dontTouch(updateMetaMask)
+    }
   }
 
   class BTBStage0to1(implicit params: CoreParameters) extends Module {

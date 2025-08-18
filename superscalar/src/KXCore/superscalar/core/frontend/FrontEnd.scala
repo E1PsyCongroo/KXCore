@@ -369,7 +369,9 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   ftq.io.reqs                := io.ftqReqs
   io.ftqResps                := ftq.io.resps
 
-  dontTouch(stage1Redirect)
-  dontTouch(stage2Redirect)
-  dontTouch(s2_fetchBundle)
+  if (params.debug) {
+    dontTouch(stage1Redirect)
+    dontTouch(stage2Redirect)
+    dontTouch(s2_fetchBundle)
+  }
 }

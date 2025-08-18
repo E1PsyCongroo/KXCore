@@ -22,6 +22,7 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
   val fetchPacket = Flipped(Decoupled(new FetchBufferResp()))
   val ftqReqs     = Output(Vec(3, UInt(ftqIdxWidth.W)))
   val ftqResps    = Input(Vec(3, new FTQInfo))
+  val icacheClear = Output(Bool())
   val icacheReq = Decoupled(new Bundle {
     val cacop = UInt(CACOPType.getWidth.W)
     val vaddr = UInt(vaddrWidth.W)
@@ -326,6 +327,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   io.commit.bits  := rob.io.commit.uop(youngest_com_idx).ftqIdx
 
   io.redirect := rob.io.redirect
+
+  io.icacheClear := rob.io.icacheClear
 
   io.csr_access.epc     := rob.io.exception.epc
   io.csr_access.ecode   := rob.io.exception.ecode

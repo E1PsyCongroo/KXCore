@@ -74,6 +74,7 @@ object IMMTypeControlField extends DecodeField[Instruction, UInt] {
       case SLTI | SLTUI | ADDI_W                                         => BitPat(IMMType.IMM_12.asUInt)
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU       => BitPat(IMMType.IMM_12.asUInt)
       case ANDI | ORI | XORI                                             => BitPat(IMMType.IMM_12U.asUInt)
+      case LL_W | SC_W                                                   => BitPat(IMMType.IMM_14.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat(IMMType.IMM_14U.asUInt)
       case SYSCALL | BREAK | DBAR | IBAR | IDLE                          => BitPat(IMMType.IMM_15U.asUInt)
       case CACOP | INVTLB                                                => BitPat(IMMType.IMM_15U.asUInt)
@@ -95,6 +96,7 @@ object OP1SelControlField extends DecodeField[Instruction, UInt] {
       case SLTI | SLTUI | ADDI_W | ANDI | ORI | XORI                  => BitPat(OP1Type.OP1_RS1.asUInt)
       case SLL_W | SRL_W | SRA_W | SLLI_W | SRLI_W | SRAI_W           => BitPat(OP1Type.OP1_RS1.asUInt)
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU    => BitPat(OP1Type.OP1_RS1.asUInt)
+      case LL_W | SC_W                                                => BitPat(OP1Type.OP1_RS1.asUInt)
       case BEQ | BNE | BLT | BGE | BLTU | BGEU                        => BitPat(OP1Type.OP1_RS1.asUInt)
       case LU12I_W                                                    => BitPat(OP1Type.OP1_RS1.asUInt)
       case PCADDU12I | JIRL | BL                                      => BitPat(OP1Type.OP1_PC.asUInt)
@@ -156,6 +158,8 @@ object EXUOPControlField extends DecodeField[Instruction, UInt] {
       case ST_W                                                                => BitPat(EXUType.EXU_STW.asUInt)
       case LD_BU                                                               => BitPat(EXUType.EXU_LDBU.asUInt)
       case LD_HU                                                               => BitPat(EXUType.EXU_LDHU.asUInt)
+      case LL_W                                                                => BitPat(EXUType.EXU_LLW.asUInt)
+      case SC_W                                                                => BitPat(EXUType.EXU_SCW.asUInt)
       case CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3                       => BitPat(EXUType.EXU_CSRXCHG.asUInt)
       case CSRRD                                                               => BitPat(EXUType.EXU_CSRRD.asUInt)
       case CSRWR                                                               => BitPat(EXUType.EXU_CSRWR.asUInt)
@@ -209,6 +213,7 @@ object RS2ControlField extends DecodeField[Instruction, UInt] {
       case SLLI_W | SRLI_W | SRAI_W                                            => BitPat(RS2From.rs2None.asUInt)
       case B | BL | JIRL                                                       => BitPat(RS2From.rs2None.asUInt)
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                                  => BitPat(RS2From.rs2None.asUInt)
+      case LL_W                                                                => BitPat(RS2From.rs2None.asUInt)
       case SYSCALL | BREAK | ERTN | DBAR | IBAR | IDLE | CPUCFG                => BitPat(RS2From.rs2None.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(RS2From.rs2None.asUInt)
       case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS2From.rs2None.asUInt)
@@ -216,6 +221,7 @@ object RS2ControlField extends DecodeField[Instruction, UInt] {
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(RS2From.rs2FromRd.asUInt)
       case BEQ | BNE | BLT | BGE | BLTU | BGEU                                 => BitPat(RS2From.rs2FromRd.asUInt)
       case ST_B | ST_H | ST_W                                                  => BitPat(RS2From.rs2FromRd.asUInt)
+      case SC_W                                                                => BitPat(RS2From.rs2FromRd.asUInt)
       case _                                                                   => BitPat(RS2From.rs2FromRk.asUInt)
     }
   }
@@ -240,6 +246,7 @@ object WBControlField extends DecodeField[Instruction, UInt] {
       case SLL_W | SRL_W | SRA_W | SLLI_W | SRLI_W | SRAI_W                    => BitPat(WBDest.destRd.asUInt)
       case JIRL                                                                => BitPat(WBDest.destRd.asUInt)
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                                  => BitPat(WBDest.destRd.asUInt)
+      case LL_W | SC_W                                                         => BitPat(WBDest.destRd.asUInt)
       case RDCNTVL_W | RDCNTVH_W                                               => BitPat(WBDest.destRd.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(WBDest.destRd.asUInt)
       case CPUCFG                                                              => BitPat(WBDest.destRd.asUInt)
@@ -258,6 +265,7 @@ object UniqControlField extends DecodeField[Instruction, Bool] {
       /* need to keep sequential read, bus read may have side effects */
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                    => BitPat.Y(1)
       case ST_B | ST_H | ST_W                                    => BitPat.Y(1)
+      case LL_W | SC_W                                           => BitPat.Y(1)
       case RDCNTVL_W | RDCNTVH_W                                 => BitPat.Y(1)
       case CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat.Y(1)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB            => BitPat.Y(1)
@@ -284,8 +292,8 @@ object BusyControlField extends DecodeField[Instruction, Bool] {
   def chiselType: Bool = Bool()
   def genTable(op: Instruction): BitPat = {
     op match {
-      case ERTN | DBAR | IDLE => BitPat.N(1)
-      case _                  => BitPat.Y(1)
+      case ERTN | DBAR | IBAR | IDLE => BitPat.N(1)
+      case _                         => BitPat.Y(1)
     }
   }
 }
@@ -416,6 +424,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
         IMMType.IMM_5U  -> inst(14, 10),
         IMMType.IMM_12  -> Sext(inst(21, 10), dataWidth),
         IMMType.IMM_12U -> inst(21, 10),
+        IMMType.IMM_14  -> Sext(inst(23, 10), dataWidth),
         IMMType.IMM_14U -> inst(23, 10),
         IMMType.IMM_15U -> inst(14, 0),
         IMMType.IMM_16  -> Sext((inst(25, 10) ## 0.U(2.W)), dataWidth),
@@ -466,6 +475,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
     )
     uop.badv   := io.req(i).badv
     uop.isErtn := inst === ERTN.inst
+    uop.isIBar := inst === IBAR.inst
     uop.busy   := decodeResult(BusyControlField)
 
     io.resp(i) := uop

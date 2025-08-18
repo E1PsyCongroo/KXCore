@@ -75,9 +75,10 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
     val ftqReq  = Output(UInt(ftqIdxWidth.W))
     val ftqResp = Input(new FTQInfo)
 
-    val commit    = Output(new RoBCommitIO)
-    val redirect  = Output(new RoBRedirectIO)
-    val exception = Output(new RoBExceptionIO)
+    val commit      = Output(new RoBCommitIO)
+    val redirect    = Output(new RoBRedirectIO)
+    val exception   = Output(new RoBExceptionIO)
+    val icacheClear = Output(Bool())
 
     val eentry = Input(UInt(dataWidth.W))
     val era    = Input(UInt(dataWidth.W))
@@ -95,6 +96,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   val rob_redirect_val = RegInit(false.B)
   val rob_redirect_info = Reg(new Bundle {
     val robIdx         = UInt(robIdxWidth.W)
+    val isIBar         = Bool()
     val isErtn         = Bool()
     val brRecoveryInfo = new BrRecoveryInfo
   })
@@ -180,6 +182,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       when(!rob_redirect_val && io.alloc(w).uop.flushOnCommit) {
         rob_redirect_val                       := true.B
         rob_redirect_info.robIdx               := io.alloc(w).uop.robIdx
+        rob_redirect_info.isIBar               := io.alloc(w).uop.isIBar
         rob_redirect_info.isErtn               := io.alloc(w).uop.isErtn
         rob_redirect_info.brRecoveryInfo       := DontCare
         rob_redirect_info.brRecoveryInfo.valid := false.B
@@ -312,7 +315,8 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       (will_redirect && rob_redirect_info.brRecoveryInfo.valid) -> rob_redirect_info.brRecoveryInfo.target,
     ),
   )
-  io.ertn := will_redirect && rob_redirect_info.isErtn && !will_throw_xcep
+  io.icacheClear := will_redirect && !will_throw_xcep && rob_redirect_info.isIBar
+  io.ertn        := will_redirect && !will_throw_xcep && rob_redirect_info.isErtn
 
   io.exception.valid := will_throw_xcep
   io.exception.epc   := redirect_uop_pc
