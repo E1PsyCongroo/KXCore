@@ -25,43 +25,51 @@ abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   val io_read_reqs  = IO(Vec(nReaders, Decoupled(UInt(params.backendParams.pregWidth.W))))
   val io_read_resps = IO(Vec(nReaders, Input(UInt(params.commonParams.dataWidth.W))))
 
-  val iss_uop_ext = ReadyValidIOExpand(io_iss_uop, 3)
+  val iss_fire = Wire(Bool())
 
-  io_read_reqs(0).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.lrs1 =/= 0.U
-  io_read_reqs(0).bits  := iss_uop_ext.bits.prs1
+  io_iss_uop.ready := iss_fire
+
+  io_read_reqs(0).valid := io_iss_uop.valid && io_iss_uop.bits.lrs1 =/= 0.U
+  io_read_reqs(0).bits  := io_iss_uop.bits.prs1
   if (nReaders == 2) {
-    io_read_reqs(1).valid := iss_uop_ext.valid(0) && iss_uop_ext.bits.lrs2 =/= 0.U
-    io_read_reqs(1).bits  := iss_uop_ext.bits.prs2
+    io_read_reqs(1).valid := io_iss_uop.valid && io_iss_uop.bits.lrs2 =/= 0.U
+    io_read_reqs(1).bits  := io_iss_uop.bits.prs2
   }
 
-  val s0_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  s0_regs.valid := iss_uop_ext.valid(0) &&
+  val s0_regs = Wire(Valid(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
+  s0_regs.valid := io_iss_uop.valid &&
     io_read_reqs.map(req => (!req.valid || req.ready)).reduce(_ && _)
-  iss_uop_ext.ready(0) := s0_regs.fire
-  s0_regs.bits(0)      := Mux(iss_uop_ext.bits.lrs1 =/= 0.U, io_read_resps(0), 0.U)
+  s0_regs.bits(0) := Mux(io_iss_uop.bits.lrs1 =/= 0.U, io_read_resps(0), 0.U)
   if (nReaders == 2) {
-    s0_regs.bits(1) := Mux(iss_uop_ext.bits.lrs2 =/= 0.U, io_read_resps(1), 0.U)
+    s0_regs.bits(1) := Mux(io_iss_uop.bits.lrs2 =/= 0.U, io_read_resps(1), 0.U)
   }
 
-  val s0_uop = Wire(Decoupled(new MicroOp))
-  s0_uop.valid         := iss_uop_ext.valid(1)
-  iss_uop_ext.ready(1) := s0_uop.fire
-  s0_uop.bits          := iss_uop_ext.bits
+  val s0_uop = Wire(Valid(new MicroOp))
+  s0_uop.valid := io_iss_uop.valid
+  s0_uop.bits  := io_iss_uop.bits
 
   s0_uop.bits.debug      := 0.U.asTypeOf(s0_uop.bits.debug.cloneType)
-  s0_uop.bits.debug.pc   := iss_uop_ext.bits.debug.pc
-  s0_uop.bits.debug.inst := iss_uop_ext.bits.debug.inst
+  s0_uop.bits.debug.pc   := io_iss_uop.bits.debug.pc
+  s0_uop.bits.debug.inst := io_iss_uop.bits.debug.inst
 
-  val s1_regs = Wire(Decoupled(Vec(nReaders, UInt(params.commonParams.dataWidth.W))))
-  PipeConnect(Some(io_kill), s0_regs, s1_regs)
+  val regs0to1 = Module(new PipeStageReg(Vec(nReaders, UInt(params.commonParams.dataWidth.W)), true))
+  regs0to1.io.flush.get := io_kill
+  regs0to1.io.in.valid  := iss_fire
+  regs0to1.io.in.bits   := s0_regs.bits
 
-  val s1_uop = Wire(Decoupled(new MicroOp))
-  PipeConnect(Some(io_kill), s0_uop, s1_uop)
+  val uop0to1 = Module(new PipeStageReg(new MicroOp, true))
+  uop0to1.io.flush.get := io_kill
+  uop0to1.io.in.valid  := iss_fire
+  uop0to1.io.in.bits   := s0_uop.bits
+
+  iss_fire := s0_uop.valid && s0_regs.valid && regs0to1.io.in.ready && uop0to1.io.in.ready
+
+  val s1_regs = regs0to1.io.out
+  val s1_uop  = uop0to1.io.out
 
   io_fu_types := fu_types
 
   if (params.debug) {
-    dontTouch(iss_uop_ext)
     dontTouch(s0_uop)
     dontTouch(s0_regs)
     dontTouch(s1_uop)
@@ -82,8 +90,6 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   import commonParams.{dataWidth, vaddrWidth, paddrWidth}
   override def fu_types: UInt = FUType.FUT_MEM.asUInt
   override def nReaders       = 2
-
-  iss_uop_ext.ready(2) := true.B
 
   val io_axi       = IO(new AXIBundle(params.axiParams))
   val io_dtlb_req  = IO(Output(new TLBReq))
@@ -236,8 +242,6 @@ class MemExeUnitWithCache(implicit params: CoreParameters) extends ExecutionUnit
   override def fu_types: UInt = FUType.FUT_MEM.asUInt
   override def nReaders       = 2
 
-  iss_uop_ext.ready(2) := true.B
-
   val io_dtlb_req  = IO(Output(new TLBReq()(commonParams)))
   val io_dtlb_resp = IO(Input(new TLBResp()(commonParams)))
   val io_axi       = IO(new AXIBundle(params.axiParams))
@@ -382,8 +386,6 @@ class UniqueExeUnit(
       (if (hasMul) FUType.FUT_MUL.asUInt else 0.U) |
       (if (hasDiv) FUType.FUT_DIV.asUInt else 0.U)
   override def nReaders = 2
-
-  iss_uop_ext.ready(2) := true.B
 
   s1_regs.ready := false.B
   s1_uop.ready  := false.B
@@ -584,20 +586,26 @@ class ALUExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val io_ftq_req  = IO(Vec(2, Decoupled(UInt(params.frontendParams.ftqIdxWidth.W))))
   val io_ftq_resp = IO(Input(Vec(2, new FTQInfo)))
 
-  io_ftq_req(0).valid := iss_uop_ext.valid(2) &&
-    (iss_uop_ext.bits.op1Sel === OP1Type.OP1_PC.asUInt ||
-      iss_uop_ext.bits.isB || iss_uop_ext.bits.isBr || iss_uop_ext.bits.isJirl)
-  io_ftq_req(0).bits  := iss_uop_ext.bits.ftqIdx
-  io_ftq_req(1).valid := iss_uop_ext.valid(2) && iss_uop_ext.bits.isJirl
-  io_ftq_req(1).bits  := WrapInc(iss_uop_ext.bits.ftqIdx, params.frontendParams.ftqNum)
-  val s0_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  s0_ftq.valid := iss_uop_ext.valid(2) &&
+  io_ftq_req(0).valid := io_iss_uop.valid &&
+    (io_iss_uop.bits.op1Sel === OP1Type.OP1_PC.asUInt ||
+      io_iss_uop.bits.isB || io_iss_uop.bits.isBr || io_iss_uop.bits.isJirl)
+  io_ftq_req(0).bits  := io_iss_uop.bits.ftqIdx
+  io_ftq_req(1).valid := io_iss_uop.valid && io_iss_uop.bits.isJirl
+  io_ftq_req(1).bits  := WrapInc(io_iss_uop.bits.ftqIdx, params.frontendParams.ftqNum)
+  val s0_ftq = Wire(Valid(io_ftq_resp.cloneType))
+  s0_ftq.valid := io_iss_uop.valid &&
     (!io_ftq_req(0).valid || io_ftq_req(0).ready) && (!io_ftq_req(1).valid || io_ftq_req(1).ready)
-  iss_uop_ext.ready(2) := s0_ftq.fire
-  s0_ftq.bits          := io_ftq_resp
+  s0_ftq.bits := io_ftq_resp
 
-  val s1_ftq = Wire(Decoupled(io_ftq_resp.cloneType))
-  PipeConnect(Some(io_kill), s0_ftq, s1_ftq)
+  val ftq0to1 = Module(new PipeStageReg(Vec(2, new FTQInfo), true))
+  ftq0to1.io.flush.get := io_kill
+  ftq0to1.io.in.valid  := iss_fire
+  ftq0to1.io.in.bits   := s0_ftq.bits
+
+  iss_fire := s0_uop.valid && s0_regs.valid && s0_ftq.valid &&
+    regs0to1.io.in.ready && uop0to1.io.in.ready && ftq0to1.io.in.ready
+
+  val s1_ftq = ftq0to1.io.out
 
   val alu = Module(new ALUUnit)
   alu.io.req.valid         := s1_uop.valid && s1_regs.valid && s1_ftq.valid
