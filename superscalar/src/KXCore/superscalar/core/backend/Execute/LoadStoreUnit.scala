@@ -10,6 +10,7 @@ import KXCore.superscalar._
 import KXCore.superscalar.core._
 import KXCore.superscalar.core.frontend._
 import EXUType._
+import CACOPType._
 
 class LoadStoreUnit(implicit params: CoreParameters) extends Module {
   import params.{commonParams, axiParams}
@@ -19,6 +20,8 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
     val axi = new AXIBundle(axiParams)
     val req = Flipped(Decoupled(new Bundle {
       val uop       = new MicroOp
+      val cacop     = UInt(CACOPType.getWidth.W)
+      val cached    = Bool()
       val vaddr     = UInt(vaddrWidth.W)
       val paddr     = UInt(paddrWidth.W)
       val isWrite   = Bool()
@@ -37,11 +40,11 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
       sHandleReq -> MuxCase(
         sHandleReq,
         Seq(
-          (!io.req.valid)                   -> sHandleReq,
-          (io.axi.ar.fire)                  -> sWaitResp,
-          (io.axi.aw.fire && io.axi.w.fire) -> sHandleReq,
-          (io.axi.aw.fire)                  -> sWaitWfire,
-          (io.axi.w.fire)                   -> sWaitAWfire,
+          (!io.req.valid || io.req.bits.cacop =/= CACOP_HIT_READ.asUInt) -> sHandleReq,
+          (io.axi.ar.fire)                                               -> sWaitResp,
+          (io.axi.aw.fire && io.axi.w.fire)                              -> sHandleReq,
+          (io.axi.aw.fire)                                               -> sWaitWfire,
+          (io.axi.w.fire)                                                -> sWaitAWfire,
         ),
       ),
       sWaitAWfire -> Mux(io.axi.aw.fire, sHandleReq, sWaitAWfire),
@@ -56,7 +59,7 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
     ),
   )
 
-  io.axi.ar.valid      := state === sHandleReq && io.req.valid && !io.req.bits.isWrite
+  io.axi.ar.valid      := state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && !io.req.bits.isWrite
   io.axi.ar.bits.addr  := io.req.bits.paddr
   io.axi.ar.bits.id    := 1.U
   io.axi.ar.bits.len   := 0.U
@@ -68,17 +71,17 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
 
   io.axi.r.ready := (state === sWaitResp) || (state === sIgnore)
 
-  io.axi.aw.valid      := (state === sHandleReq && io.req.valid && io.req.bits.isWrite) || (state === sWaitAWfire)
-  io.axi.aw.bits.addr  := io.req.bits.paddr
-  io.axi.aw.bits.id    := 1.U
-  io.axi.aw.bits.len   := 0.U
-  io.axi.aw.bits.size  := log2Ceil(dataWidth / 8).U
+  io.axi.aw.valid     := (state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && io.req.bits.isWrite) || (state === sWaitAWfire)
+  io.axi.aw.bits.addr := io.req.bits.paddr
+  io.axi.aw.bits.id   := 1.U
+  io.axi.aw.bits.len  := 0.U
+  io.axi.aw.bits.size := log2Ceil(dataWidth / 8).U
   io.axi.aw.bits.burst := AXIParameters.BURST_INCR
   io.axi.aw.bits.lock  := 0.U
   io.axi.aw.bits.cache := 0.U
   io.axi.aw.bits.prot  := 0.U
 
-  io.axi.w.valid     := (state === sHandleReq && io.req.valid && io.req.bits.isWrite) || (state === sWaitWfire)
+  io.axi.w.valid     := (state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && io.req.bits.isWrite) || (state === sWaitWfire)
   io.axi.w.bits.id   := 1.U
   io.axi.w.bits.last := 1.U
   io.axi.w.bits.data := io.req.bits.writeData

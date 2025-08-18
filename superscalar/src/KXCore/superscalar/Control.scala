@@ -51,7 +51,8 @@ object EXUType extends ChiselEnum {
   val EXU_RDCNTID = EXU_AND
   val EXU_RDCNTVL = EXU_SUB
   val EXU_RDCNTVH = EXU_SLT
-  val EXU_CSRRD   = EXU_SLTU
+  val EXU_CACOP   = EXU_SLTU
+  val EXU_CSRRD   = EXU_OR
   val EXU_CSRXCHG = EXU_NOR
   val EXU_CSRWR   = EXU_SGE
 

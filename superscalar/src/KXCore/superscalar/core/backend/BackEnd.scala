@@ -23,13 +23,10 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
   val ftqReqs     = Output(Vec(3, UInt(ftqIdxWidth.W)))
   val ftqResps    = Input(Vec(3, new FTQInfo))
   val icacheClear = Output(Bool())
-  val icacheReq = Decoupled(new Bundle {
-    val cacop = UInt(CACOPType.getWidth.W)
-    val vaddr = UInt(vaddrWidth.W)
-  })
-  val tlbCmd   = Output(new TLBCmdIO)
-  val commit   = Valid(UInt(ftqIdxWidth.W))
-  val redirect = Output(new RoBRedirectIO)
+  val icacheCacop = new CacheCACOPIO
+  val tlbCmd      = Output(new TLBCmdIO)
+  val commit      = Valid(UInt(ftqIdxWidth.W))
+  val redirect    = Output(new RoBRedirectIO)
   val csr_access = new Bundle {
     val raddr = Output(UInt(14.W))       // CSR address to read
     val rdata = Input(UInt(dataWidth.W)) // CSR read data
@@ -196,13 +193,14 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   dispatcher.io.dis_uops(2) <> intIssUnit.io.dis_uops
 
   // execute
-  memIssUnit.io.iss_uops(0) <> memExeUnit.io_iss_uop
-  io.axi                    <> memExeUnit.io_axi
-  io.dtlbReq                := memExeUnit.io_dtlb_req
-  memExeUnit.io_dtlb_resp   := io.dtlbResp
-  io.icacheReq.valid        := false.B
-  io.icacheReq.bits         := DontCare
+  memIssUnit.io.iss_uops(0)  <> memExeUnit.io_iss_uop
+  io.axi                     <> memExeUnit.io_axi
+  memExeUnit.io_dcache_cacop <> unqExeUnit.io_dcache_cacop.get
+  io.dtlbReq                 := memExeUnit.io_dtlb_req
+  memExeUnit.io_dtlb_resp    := io.dtlbResp
 
+  unqIssUnit.io.iss_uops(0)          <> unqExeUnit.io_iss_uop
+  io.icacheCacop                     <> unqExeUnit.io_icache_cacop.get
   io.csr_access.raddr                := unqExeUnit.io_csr_access.get.raddr
   unqExeUnit.io_csr_access.get.rdata := io.csr_access.rdata
 
@@ -217,7 +215,6 @@ class BackEnd(implicit params: CoreParameters) extends Module {
 
   io.tlbCmd := unqExeUnit.io_tlb_cmd.get
 
-  unqIssUnit.io.iss_uops(0) <> unqExeUnit.io_iss_uop
   intIssUnit.io.iss_uops zip aluExeUnits map { case (iss_uop, exu) => iss_uop <> exu.io_iss_uop }
 
   memExeUnit.io_read_reqs(0)  <> regFile.io.read_reqs(0)

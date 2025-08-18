@@ -22,12 +22,9 @@ class FrontEndIO(implicit params: CoreParameters) extends Bundle {
   val fetchPacket = Decoupled(new FetchBufferResp())
 
   val icacheClear = Input(Bool())
-  val icacheReq = Flipped(Decoupled(new Bundle {
-    val cacop = UInt(CACOPType.getWidth.W)
-    val vaddr = UInt(vaddrWidth.W)
-  }))
-  val ftqReqs  = Input(Vec(3, UInt(ftqIdxWidth.W)))
-  val ftqResps = Output(Vec(3, new FTQInfo))
+  val icacheCacop = Flipped(new CacheCACOPIO)
+  val ftqReqs     = Input(Vec(3, UInt(ftqIdxWidth.W)))
+  val ftqResps    = Output(Vec(3, new FTQInfo))
 
   val commit = Flipped(Valid(UInt(ftqIdxWidth.W)))
   val redirect = Input(new Bundle {
@@ -64,7 +61,15 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   flush.stage2 := backendRedirect.valid
 
   // stage0: pre-fetch
-  val icacheArb       = Module(new Arbiter(io.icacheReq.bits.cloneType, 2))
+  val icacheArb = Module(
+    new Arbiter(
+      new Bundle {
+        val cacop = UInt(CACOPType.getWidth.W)
+        val vaddr = UInt(vaddrWidth.W)
+      },
+      2,
+    ),
+  )
   val icacheStage0to1 = Module(new ICache.ICacheStage0to1)
   val bpuStage0to1    = Module(new BranchPredictor.BranchPredictorStage0to1)
   val pipeStage0to1 = Module(
@@ -85,6 +90,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   val s0_npc       = RegInit(pcReset.U)
   val s0_cacop     = WireInit(icacheArb.io.out.bits.cacop)
   val s0_cached    = io.itlbResp.mat(0)
+  val s0_vaddr     = WireInit(icacheArb.io.out.bits.vaddr)
   val s0_paddr     = io.itlbResp.paddr
   val s0_isAdef    = Wire(Bool())
   val s0_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
@@ -97,12 +103,11 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
       stage1Redirect.valid  -> stage1Redirect.bits,
     ),
   )
-  s0_stall := Mux(flush.stage1, false.B, Mux(s0_exception.valid && s0_fire, true.B, s0_stall))
-  s0_npc   := s0_fetchPC
-  s0_isAdef := (icacheArb.io.out.bits.cacop === CACOP_HIT_READ.asUInt) &&
-    (icacheArb.io.out.bits.vaddr(1, 0) =/= 0.U)
-  s0_exception.valid := s0_isAdef ||
-    (Seq(CACOP_HIT_READ, CACOP_HIT_INV).map(_.asUInt === s0_cacop).reduce(_ || _) && io.itlbResp.exception.valid)
+  s0_stall  := Mux(flush.stage1, false.B, Mux(s0_exception.valid && s0_fire, true.B, s0_stall))
+  s0_npc    := s0_fetchPC
+  s0_isAdef := s0_vaddr(1, 0) =/= 0.U
+  s0_exception.valid := (s0_cacop === CACOP_HIT_READ.asUInt) && (s0_isAdef ||
+    io.itlbResp.exception.valid)
   s0_exception.bits := Mux(s0_isAdef, ECODE.ADEF.asUInt, io.itlbResp.exception.bits)
 
   icacheStage0to1.io.flush   := flush.stage1
@@ -113,11 +118,16 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   bpuStage0to1.io.bimRead     <> bpu.io.bim
   bpuStage0to1.io.btbRead     <> bpu.io.btb
 
-  icacheArb.io.in(0).valid      := true.B
-  icacheArb.io.in(0).bits.cacop := CACOP_HIT_READ.asUInt
-  icacheArb.io.in(0).bits.vaddr := s0_fetchPC
+  icacheArb.io.in(0).valid       := io.icacheCacop.valid
+  icacheArb.io.in(0).bits.cacop  := io.icacheCacop.cacop
+  icacheArb.io.in(0).bits.vaddr  := io.icacheCacop.vaddr
+  io.icacheCacop.ready           := icacheArb.io.in(0).ready
+  io.icacheCacop.exception.valid := io.icacheCacop.cacop === CACOP_HIT_INV.asUInt && io.itlbResp.exception.valid
+  io.icacheCacop.exception.bits  := io.itlbResp.exception.bits
 
-  icacheArb.io.in(1) <> io.icacheReq
+  icacheArb.io.in(1).valid      := true.B
+  icacheArb.io.in(1).bits.cacop := CACOP_HIT_READ.asUInt
+  icacheArb.io.in(1).bits.vaddr := s0_fetchPC
 
   icacheArb.io.out.ready := s0_fire
 
@@ -125,14 +135,14 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   io.itlbReq.vaddr   := icacheArb.io.out.bits.vaddr
 
   pipeStage0to1.io.in.valid          := s0_fire
-  pipeStage0to1.io.in.bits.fetchPC   := s0_fetchPC
   pipeStage0to1.io.in.bits.cacop     := s0_cacop
   pipeStage0to1.io.in.bits.cached    := s0_cached
+  pipeStage0to1.io.in.bits.fetchPC   := s0_vaddr
   pipeStage0to1.io.in.bits.paddr     := s0_paddr
   pipeStage0to1.io.in.bits.exception := s0_exception
 
   icacheStage0to1.io.req.valid := s0_fire && !s0_exception.valid
-  icacheStage0to1.io.req.bits  := s0_fetchPC
+  icacheStage0to1.io.req.bits  := s0_vaddr
 
   bpuStage0to1.io.req.valid := s0_fire && !s0_exception.valid &&
     s0_cacop === CACOPType.CACOP_HIT_READ.asUInt
@@ -200,9 +210,9 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheStage1.io.dataWrite <> icache.io.dataPort.write
 
   icacheStage1.io.req.valid       := pipeStage0to1.io.out.valid && icacheStage0to1.io.resp.valid
-  icacheStage1.io.req.bits.vaddr  := s1_fetchPC
   icacheStage1.io.req.bits.cacop  := s1_cacop
   icacheStage1.io.req.bits.cached := s1_cached
+  icacheStage1.io.req.bits.vaddr  := s1_fetchPC
   icacheStage1.io.req.bits.paddr  := s1_paddr
   icacheStage1.io.req.bits.meta   := icacheStage0to1.io.resp.bits
 

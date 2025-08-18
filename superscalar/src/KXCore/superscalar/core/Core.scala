@@ -89,8 +89,9 @@ class Core(implicit params: CoreParameters) extends Module {
   axiAribter.io.out   <> io.axi
 
   frontend.io.icacheClear       := backend.io.icacheClear
-  frontend.io.icacheReq.valid   := backend.io.icacheReq.valid
-  frontend.io.icacheReq.bits    := backend.io.icacheReq.bits
+  frontend.io.icacheCacop.valid := backend.io.icacheCacop.valid
+  frontend.io.icacheCacop.cacop := backend.io.icacheCacop.cacop
+  frontend.io.icacheCacop.vaddr := backend.io.icacheCacop.vaddr
   frontend.io.itlbResp          := tlb.io.transResp0
   frontend.io.fetchPacket.ready := backend.io.fetchPacket.ready
   frontend.io.ftqReqs(0)        := backend.io.ftqReqs(0)
@@ -99,13 +100,14 @@ class Core(implicit params: CoreParameters) extends Module {
   frontend.io.commit            := backend.io.commit
   frontend.io.redirect          := backend.io.redirect
 
-  backend.io.dtlbResp          := tlb.io.transResp1
-  backend.io.fetchPacket.valid := frontend.io.fetchPacket.valid
-  backend.io.fetchPacket.bits  := frontend.io.fetchPacket.bits
-  backend.io.ftqResps(0)       := frontend.io.ftqResps(0)
-  backend.io.ftqResps(1)       := frontend.io.ftqResps(1)
-  backend.io.ftqResps(2)       := frontend.io.ftqResps(2)
-  backend.io.icacheReq.ready   := frontend.io.icacheReq.ready
+  backend.io.dtlbResp              := tlb.io.transResp1
+  backend.io.fetchPacket.valid     := frontend.io.fetchPacket.valid
+  backend.io.fetchPacket.bits      := frontend.io.fetchPacket.bits
+  backend.io.ftqResps(0)           := frontend.io.ftqResps(0)
+  backend.io.ftqResps(1)           := frontend.io.ftqResps(1)
+  backend.io.ftqResps(2)           := frontend.io.ftqResps(2)
+  backend.io.icacheCacop.ready     := frontend.io.icacheCacop.ready
+  backend.io.icacheCacop.exception := frontend.io.icacheCacop.exception
 
   io.ws_valid := false.B
   io.rf_rdata := 0.U
