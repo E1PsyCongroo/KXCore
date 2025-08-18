@@ -239,7 +239,7 @@ object Privilege {
       def pie  = value(2)    // Interrupt enable
 
       def write(value: UInt): UInt = {
-        value & 0x3.U(32.W)
+        value & 0x7.U(32.W)
       }
 
       def set_pplv(pplv: UInt): PRMD = {
@@ -302,7 +302,7 @@ object Privilege {
       val value = UInt(32.W)
 
       def write(value: UInt): UInt = {
-        value & ~0x1f.U(32.W)
+        value & ~0x3f.U(32.W)
       }
     }
 
