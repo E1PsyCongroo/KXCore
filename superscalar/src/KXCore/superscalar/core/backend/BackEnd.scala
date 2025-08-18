@@ -36,9 +36,14 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
     val wdata = Output(UInt(dataWidth.W)) // CSR write data
     val wmask = Output(UInt(dataWidth.W)) // CSR write mask
 
+    val crmd      = Input(new CSR.CRMD)
     val counterID = Input(UInt(dataWidth.W))
     val cntvh     = Input(UInt(dataWidth.W))
     val cntvl     = Input(UInt(dataWidth.W))
+
+    val llbit     = Input(Bool())
+    val set_llbit = Output(Bool())
+    val clr_llbit = Output(Bool())
 
     val epc     = Output(UInt(vaddrWidth.W))     // Program counter for exception handling
     val ecode   = Output(UInt(ECODE.getWidth.W)) // Exception code
@@ -134,8 +139,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   disUopFireReg := Mux(decToRen.ready || flush, 0.U, disUopFire)
   disData.ready := VecInit(decToRen.bits.map(_.valid)).asUInt === disUopFire
 
-  var dis_not_fire    = false.B
   var dis_first_valid = true.B
+  var block_dis       = false.B
   val dis_alloc_regs  = Reg(Vec(coreWidth, UInt(backendParams.pregWidth.W)))
   for (i <- 0 until coreWidth) {
     renameFreeList.io.allocPregs(i).ready := disData.bits(i).valid && disData.bits(i).bits.ldst =/= 0.U
@@ -156,12 +161,12 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     rob.io.alloc(i).uop   := disData.bits(i).bits
 
     val dis_first_valid_yet = WireInit(dis_first_valid)
-    val dis_not_fire_yet    = WireInit(dis_not_fire)
+    val block_dis_yet       = WireInit(block_dis)
 
     disData.bits(i).valid := decToRen.valid && decToRen.bits(i).valid && !disUopFireReg(i) &&
       (renameFreeList.io.allocPregs(i).valid || disData.bits(i).bits.ldst === 0.U) &&
       (!disData.bits(i).bits.isUnique || (dis_first_valid_yet && rob.io.empty)) &&
-      rob.io.alloc(i).ready && dispatcher.io.ren_uops(i).ready && !dis_not_fire_yet
+      rob.io.alloc(i).ready && dispatcher.io.ren_uops(i).ready && !block_dis
     disData.bits(i).bits        := decToRen.bits(i).bits
     disData.bits(i).bits.pdst   := renameFreeList.io.allocPregs(i).bits
     disData.bits(i).bits.robIdx := rob.io.alloc(i).idx
@@ -182,7 +187,8 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     disData.bits(i).bits.prs2Busy := renameBusyTable.io.busyResps(i).prs2Busy
 
     dis_first_valid = dis_first_valid && !disData.bits(i).valid
-    dis_not_fire = dis_not_fire || (decToRen.bits(i).valid && !disUopFireReg(i) && !disData.bits(i).valid)
+    block_dis = block_dis || (decToRen.bits(i).valid && !disUopFireReg(i) &&
+      (!disData.bits(i).valid || disData.bits(i).bits.isUnique))
     dispatcher.io.ren_uops(i).valid := disData.bits(i).valid
     dispatcher.io.ren_uops(i).bits  := disData.bits(i).bits
   }
@@ -193,11 +199,14 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   dispatcher.io.dis_uops(2) <> intIssUnit.io.dis_uops
 
   // execute
-  memIssUnit.io.iss_uops(0)  <> memExeUnit.io_iss_uop
-  io.axi                     <> memExeUnit.io_axi
-  memExeUnit.io_dcache_cacop <> unqExeUnit.io_dcache_cacop.get
-  io.dtlbReq                 := memExeUnit.io_dtlb_req
-  memExeUnit.io_dtlb_resp    := io.dtlbResp
+  memIssUnit.io.iss_uops(0)   <> memExeUnit.io_iss_uop
+  io.axi                      <> memExeUnit.io_axi
+  memExeUnit.io_dcache_cacop  <> unqExeUnit.io_dcache_cacop.get
+  io.dtlbReq                  := memExeUnit.io_dtlb_req
+  memExeUnit.io_dtlb_resp     := io.dtlbResp
+  io.csr_access.set_llbit     := memExeUnit.io_csr_llbit.set
+  io.csr_access.clr_llbit     := memExeUnit.io_csr_llbit.clr
+  memExeUnit.io_csr_llbit.bit := io.csr_access.llbit
 
   unqIssUnit.io.iss_uops(0)          <> unqExeUnit.io_iss_uop
   io.icacheCacop                     <> unqExeUnit.io_icache_cacop.get
@@ -209,6 +218,7 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   io.csr_access.wdata := unqExeUnit.io_csr_access.get.wdata
   io.csr_access.wmask := unqExeUnit.io_csr_access.get.wmask
 
+  unqExeUnit.io_csr_access.get.crmd      := io.csr_access.crmd
   unqExeUnit.io_csr_access.get.counterID := io.csr_access.counterID
   unqExeUnit.io_csr_access.get.cntvh     := io.csr_access.cntvh
   unqExeUnit.io_csr_access.get.cntvl     := io.csr_access.cntvl
@@ -349,7 +359,7 @@ class BackEnd(implicit params: CoreParameters) extends Module {
     dontTouch(decToRen)
     dontTouch(disData)
     dontTouch(dis_first_valid)
-    dontTouch(dis_not_fire)
+    dontTouch(block_dis)
     dontTouch(rob.io)
     dontTouch(dispatcher.io)
     dontTouch(memIssUnit.io)

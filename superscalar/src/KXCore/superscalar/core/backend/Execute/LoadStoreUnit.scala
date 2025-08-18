@@ -18,6 +18,11 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
 
   val io = IO(new Bundle {
     val axi = new AXIBundle(axiParams)
+    val llbit = new Bundle {
+      val bit = Input(Bool())
+      val set = Output(Bool())
+      val clr = Output(Bool())
+    }
     val req = Flipped(Decoupled(new Bundle {
       val uop       = new MicroOp
       val cacop     = UInt(CACOPType.getWidth.W)
@@ -40,11 +45,12 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
       sHandleReq -> MuxCase(
         sHandleReq,
         Seq(
-          (!io.req.valid || io.req.bits.cacop =/= CACOP_HIT_READ.asUInt) -> sHandleReq,
-          (io.axi.ar.fire)                                               -> sWaitResp,
-          (io.axi.aw.fire && io.axi.w.fire)                              -> sHandleReq,
-          (io.axi.aw.fire)                                               -> sWaitWfire,
-          (io.axi.w.fire)                                                -> sWaitAWfire,
+          (!io.req.valid || (io.req.bits.cacop =/= CACOP_HIT_READ.asUInt) ||
+            (io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) -> sHandleReq,
+          (io.axi.ar.fire)                                                -> sWaitResp,
+          (io.axi.aw.fire && io.axi.w.fire)                               -> sHandleReq,
+          (io.axi.aw.fire)                                                -> sWaitWfire,
+          (io.axi.w.fire)                                                 -> sWaitAWfire,
         ),
       ),
       sWaitAWfire -> Mux(io.axi.aw.fire, sHandleReq, sWaitAWfire),
@@ -71,17 +77,23 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
 
   io.axi.r.ready := (state === sWaitResp) || (state === sIgnore)
 
-  io.axi.aw.valid     := (state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && io.req.bits.isWrite) || (state === sWaitAWfire)
-  io.axi.aw.bits.addr := io.req.bits.paddr
-  io.axi.aw.bits.id   := 1.U
-  io.axi.aw.bits.len  := 0.U
-  io.axi.aw.bits.size := log2Ceil(dataWidth / 8).U
+  io.axi.aw.valid := (state === sHandleReq && io.req.valid &&
+    (io.req.bits.cacop === CACOP_HIT_READ.asUInt) &&
+    io.req.bits.isWrite && !(io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) ||
+    (state === sWaitAWfire)
+  io.axi.aw.bits.addr  := io.req.bits.paddr
+  io.axi.aw.bits.id    := 1.U
+  io.axi.aw.bits.len   := 0.U
+  io.axi.aw.bits.size  := log2Ceil(dataWidth / 8).U
   io.axi.aw.bits.burst := AXIParameters.BURST_INCR
   io.axi.aw.bits.lock  := 0.U
   io.axi.aw.bits.cache := 0.U
   io.axi.aw.bits.prot  := 0.U
 
-  io.axi.w.valid     := (state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && io.req.bits.isWrite) || (state === sWaitWfire)
+  io.axi.w.valid := (state === sHandleReq && io.req.valid &&
+    (io.req.bits.cacop === CACOP_HIT_READ.asUInt) &&
+    io.req.bits.isWrite && !(io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) ||
+    (state === sWaitWfire)
   io.axi.w.bits.id   := 1.U
   io.axi.w.bits.last := 1.U
   io.axi.w.bits.data := io.req.bits.writeData
@@ -104,18 +116,22 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
     io.axi.r.fire && io.axi.r.bits.id === 1.U,
   )
 
+  io.llbit.set := io.req.bits.uop.exuCmd === EXU_LLW.asUInt && io.resp.fire
+  io.llbit.clr := io.req.bits.uop.exuCmd === EXU_SCW.asUInt && io.resp.fire
+
   io.req.ready := io.resp.fire
 
-  io.resp.valid := MuxLookup(state, false.B)(
+  io.resp.valid := io.req.valid && MuxLookup(state, false.B)(
     Seq(
-      sHandleReq  -> (io.axi.aw.fire && io.axi.w.fire),
+      sHandleReq -> ((io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit) ||
+        (io.axi.aw.fire && io.axi.w.fire)),
       sWaitAWfire -> io.axi.aw.fire,
       sWaitWfire  -> io.axi.w.fire,
-      sSendResp   -> io.req.valid,
+      sSendResp   -> true.B,
     ),
   )
   io.resp.bits.uop  := io.req.bits.uop
-  io.resp.bits.data := rdata
+  io.resp.bits.data := Mux(io.req.bits.uop.exuCmd === EXU_SCW.asUInt, io.llbit.bit, rdata)
 
   if (params.debug) {
     dontTouch(state)

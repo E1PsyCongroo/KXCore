@@ -90,6 +90,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   val rob_xcep_val  = RegInit(false.B)
   val rob_xcep_info = Reg(new Bundle {
     val robIdx = UInt(robIdxWidth.W)
+    val isIdle = Bool()
     val ecode  = UInt(ECODE.getWidth.W)
     val badv   = UInt(vaddrWidth.W)
   })
@@ -175,6 +176,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       rob_redirect(rob_tail)    := io.alloc(w).uop.flushOnCommit
       when(!rob_xcep_val && io.alloc(w).uop.exception) {
         rob_xcep_val         := true.B
+        rob_xcep_info.isIdle := io.alloc(w).uop.isIdle
         rob_xcep_info.robIdx := io.alloc(w).uop.robIdx
         rob_xcep_info.ecode  := io.alloc(w).uop.ecode
         rob_xcep_info.badv   := io.alloc(w).uop.badv
@@ -182,8 +184,8 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       when(!rob_redirect_val && io.alloc(w).uop.flushOnCommit) {
         rob_redirect_val                       := true.B
         rob_redirect_info.robIdx               := io.alloc(w).uop.robIdx
-        rob_redirect_info.isIBar               := io.alloc(w).uop.isIBar
         rob_redirect_info.isErtn               := io.alloc(w).uop.isErtn
+        rob_redirect_info.isIBar               := io.alloc(w).uop.isIBar
         rob_redirect_info.brRecoveryInfo       := DontCare
         rob_redirect_info.brRecoveryInfo.valid := false.B
       }
@@ -222,6 +224,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       rob_redirect_val                 := true.B
       rob_redirect_info.robIdx         := oldest_br_info.uop.robIdx
       rob_redirect_info.isErtn         := false.B
+      rob_redirect_info.isIBar         := false.B
       rob_redirect_info.brRecoveryInfo := oldest_br_info.brRecoveryInfo
     }
 
@@ -237,6 +240,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
       io.xcepInfo.reduce((oldest, info) => Mux(!oldest.valid || (info.valid && IsOlder(info.bits.robIdx, oldest.bits.robIdx, rob_head_idx)), info, oldest))
     when(oldest_xcep_info.valid && (!rob_xcep_val || IsOlder(oldest_xcep_info.bits.robIdx, rob_xcep_info.robIdx, rob_head_idx))) {
       rob_xcep_val         := true.B
+      rob_xcep_info.isIdle := false.B
       rob_xcep_info.robIdx := oldest_xcep_info.bits.robIdx
       rob_xcep_info.ecode  := oldest_xcep_info.bits.ecode
       rob_xcep_info.badv   := oldest_xcep_info.bits.badv
@@ -319,7 +323,7 @@ class ReorderBuffer(implicit params: CoreParameters) extends Module {
   io.ertn        := will_redirect && !will_throw_xcep && rob_redirect_info.isErtn
 
   io.exception.valid := will_throw_xcep
-  io.exception.epc   := redirect_uop_pc
+  io.exception.epc   := Mux(rob_xcep_info.isIdle, redirect_uop_pc + instBytes.U, redirect_uop_pc)
   io.exception.ecode := rob_xcep_info.ecode
   io.exception.badv  := rob_xcep_info.badv
 

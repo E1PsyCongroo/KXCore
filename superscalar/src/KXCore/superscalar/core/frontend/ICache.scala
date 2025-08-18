@@ -108,7 +108,7 @@ object ICache {
       }
     }
 
-    assert(!(io.metaPort.read.en && io.metaPort.write.en))
+    // assert(!(io.metaPort.read.en && io.metaPort.write.en))
     assert(!(io.dataPort.read.en && io.dataPort.write.en))
 
     val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)

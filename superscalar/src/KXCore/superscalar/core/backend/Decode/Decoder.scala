@@ -413,7 +413,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
   )
 
   val NOP     = "b0000_001010_000000000000_00000_00000".U(instWidth.W)
-  val unImpls = Seq(PRELD, LL_W, SC_W)
+  val unImpls = Seq(PRELD)
 
   for (i <- 0 until coreWidth) {
     val ine = !possiblePatterns.map(_.inst === io.req(i).inst).reduce(_ || _) ||
@@ -482,6 +482,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
     uop.badv   := io.req(i).badv
     uop.isErtn := inst === ERTN.inst
     uop.isIBar := inst === IBAR.inst
+    uop.isIdle := inst === IDLE.inst
     uop.busy   := decodeResult(BusyControlField)
 
     io.resp(i) := uop

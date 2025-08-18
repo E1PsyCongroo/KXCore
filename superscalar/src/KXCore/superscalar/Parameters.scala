@@ -23,8 +23,10 @@ case class CommonParameters(
 
 case class CacheParameters(
     id: Int = 0,
-    nSets: Int = 512,
-    nWays: Int = 16,
+    // nSets: Int = 512,
+    // nWays: Int = 16,
+    nSets: Int = 64,
+    nWays: Int = 4,
     nBanks: Int = 1,
     replacer: Option[String] = Some("random"),
     fetchBytes: Int = 16,

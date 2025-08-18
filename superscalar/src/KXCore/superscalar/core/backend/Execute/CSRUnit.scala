@@ -49,6 +49,14 @@ class CSRIO(implicit params: CoreParameters) extends Bundle {
   })
   /* ------ TLB Command ------ */
 
+  /* ------ ATOMIC Command ------ */
+  val atomic = new Bundle {
+    val llbit     = Output(Bool())
+    val set_llbit = Input(Bool())
+    val clr_llbit = Input(Bool())
+  }
+  /* ------ ATOMIC Command ------ */
+
   /* ------ Exception Enter ------ */
   val epc     = Input(UInt(vaddrWidth.W))     // Program counter for exception handling
   val ecode   = Input(UInt(ECODE.getWidth.W)) // Exception code
@@ -186,6 +194,15 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   io.interrupt.pending := (estat.is & ecfg.lie).orR & crmd.ie
   /* ------ Interrupt Pending ------ */
 
+  /* ------ atomic ------ */
+  io.atomic.llbit := llbit
+  when(io.atomic.set_llbit) {
+    llbit := true.B
+  }.elsewhen(io.atomic.clr_llbit) {
+    llbit := false.B
+  }
+  /* ------ atomic ------ */
+
   /* ------ Write Logic ------ */
   when(io.excp_en) {
     crmd         := excp_crmd
@@ -240,7 +257,8 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
     tid := Mux(io.waddr === CSRAddr.TID.U, wdata | (tid & ~io.wmask), tid)
 
-    llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1), false.B, llbit)
+    klo   := Mux(io.waddr === CSRAddr.LLBCTL.U, wdata(2) && io.wmask(2), klo)
+    llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1) && io.wmask(1), false.B, llbit)
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }

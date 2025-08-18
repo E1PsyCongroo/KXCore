@@ -68,9 +68,14 @@ class Core(implicit params: CoreParameters) extends Module {
 
   csr.io.tlbUpdate := tlb.io.tlbUpdate
 
+  backend.io.csr_access.crmd      := csr.io.crmd
   backend.io.csr_access.counterID := csr.io.counterID
   backend.io.csr_access.cntvh     := csr.io.cntvh
   backend.io.csr_access.cntvl     := csr.io.cntvl
+
+  backend.io.csr_access.llbit := csr.io.atomic.llbit
+  csr.io.atomic.set_llbit     := backend.io.csr_access.set_llbit
+  csr.io.atomic.clr_llbit     := backend.io.csr_access.clr_llbit
 
   csr.io.epc                   := backend.io.csr_access.epc
   csr.io.ecode                 := backend.io.csr_access.ecode

@@ -12,6 +12,7 @@ import KXCore.superscalar.core.frontend._
 import EXUType._
 import CACOPType._
 import firtoolresolver.shaded.coursier.cache.Cache
+import KXCore.common.Instruction.SLL_W
 
 abstract class ExecutionUnit(implicit params: CoreParameters) extends Module {
   def fu_types: UInt = 0.U(FUType.getWidth.W)
@@ -83,10 +84,15 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
 
   iss_uop_ext.ready(2) := true.B
 
-  val io_dtlb_req     = IO(Output(new TLBReq))
-  val io_dtlb_resp    = IO(Input(new TLBResp))
+  val io_axi       = IO(new AXIBundle(params.axiParams))
+  val io_dtlb_req  = IO(Output(new TLBReq))
+  val io_dtlb_resp = IO(Input(new TLBResp))
+  val io_csr_llbit = IO(new Bundle {
+    val bit = Input(Bool())
+    val set = Output(Bool())
+    val clr = Output(Bool())
+  })
   val io_dcache_cacop = IO(Flipped(new CacheCACOPIO))
-  val io_axi          = IO(new AXIBundle(params.axiParams))
   val io_mem_resp     = IO(Output(Valid(new ExeUnitResp)))
   val io_mem_xcep     = IO(Output(Valid(new MicroOp)))
 
@@ -100,7 +106,8 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
     ),
   )
   val lsu = Module(new LoadStoreUnit)
-  lsu.io.axi <> io_axi
+  lsu.io.axi   <> io_axi
+  lsu.io.llbit <> io_csr_llbit
 
   val s1_cacop   = WireInit(dcacheArb.io.out.bits.cacop)
   val s1_cached  = io_dtlb_resp.mat(0)
@@ -112,6 +119,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
       EXU_STB.asUInt -> ("b0001".U << s1_vaddr(1, 0)),
       EXU_STH.asUInt -> ("b0011".U << s1_vaddr(1, 0)),
       EXU_STW.asUInt -> "b1111".U,
+      EXU_SCW.asUInt -> "b1111".U,
     ),
   )
   val s1_writeData = s1_regs.bits(1) << (s1_vaddr(1, 0) ## 0.U(3.W))
@@ -121,11 +129,13 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
         EXU_STB.asUInt  -> 0.U,
         EXU_STH.asUInt  -> 1.U,
         EXU_STW.asUInt  -> 3.U,
+        EXU_SCW.asUInt  -> 3.U,
         EXU_LDB.asUInt  -> 0.U,
         EXU_LDBU.asUInt -> 0.U,
         EXU_LDH.asUInt  -> 1.U,
         EXU_LDHU.asUInt -> 1.U,
         EXU_LDW.asUInt  -> 3.U,
+        EXU_LLW.asUInt  -> 3.U,
       ),
     )) =/= 0.U
   val s1_exception = Wire(Valid(UInt(ECODE.getWidth.W)))
@@ -146,7 +156,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_dtlb_req.isWrite := s1_isWrite
   io_dtlb_req.vaddr   := s1_vaddr
 
-  s1_exception.valid := (s1_cached === CACOP_HIT_READ.asUInt) && (s1_isAle || io_dtlb_resp.exception.valid)
+  s1_exception.valid := (s1_cacop === CACOP_HIT_READ.asUInt) && (s1_isAle || io_dtlb_resp.exception.valid)
   s1_exception.bits  := Mux(s1_isAle, ECODE.ALE.asUInt, io_dtlb_resp.exception.bits)
 
   val s2_reg = Module(
@@ -180,11 +190,13 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   s2_reg.io.in.bits.uop.ecode     := s1_exception.bits
   s2_reg.io.in.bits.uop.badv      := s1_vaddr
 
-  s2_reg.io.in.bits.uop.debug.load      := VecInit(Seq(EXU_LDB, EXU_LDBU, EXU_LDH, EXU_LDHU, EXU_LDW).map(_.asUInt === s1_uop.bits.exuCmd)).asUInt
+  s2_reg.io.in.bits.uop.debug.load      := VecInit(Seq(EXU_LDB, EXU_LDBU, EXU_LDH, EXU_LDHU, EXU_LDW, EXU_LLW).map(_.asUInt === s1_uop.bits.exuCmd)).asUInt
   s2_reg.io.in.bits.uop.debug.loadVaddr := s1_vaddr
   s2_reg.io.in.bits.uop.debug.loadPaddr := s1_paddr
 
-  s2_reg.io.in.bits.uop.debug.store      := VecInit(Seq(EXU_STB, EXU_STH, EXU_STW).map(_.asUInt === s1_uop.bits.exuCmd)).asUInt
+  s2_reg.io.in.bits.uop.debug.store := VecInit(
+    Seq(EXU_STB, EXU_STH, EXU_STW, EXU_SCW).map(_.asUInt === s1_uop.bits.exuCmd),
+  ).asUInt & (io_csr_llbit.bit ## "b111".U(3.W))
   s2_reg.io.in.bits.uop.debug.storeVaddr := s1_vaddr
   s2_reg.io.in.bits.uop.debug.storePaddr := s1_paddr
   s2_reg.io.in.bits.uop.debug.storeData := s1_writeData &
@@ -454,6 +466,7 @@ class UniqueExeUnit(
       val wdata = Output(UInt(dataWidth.W)) // CSR write data
       val wmask = Output(UInt(dataWidth.W)) // CSR write mask
 
+      val crmd      = Input(new CSR.CRMD)
       val counterID = Input(UInt(dataWidth.W))
       val cntvh     = Input(UInt(dataWidth.W))
       val cntvl     = Input(UInt(dataWidth.W))
@@ -486,20 +499,31 @@ class UniqueExeUnit(
     io_dcache_cacop.valid := false.B
     io_csr_resp.valid     := false.B
     io_csr_resp.bits      := DontCare
-    io_csr_xcep.valid     := false.B
     io_csr_xcep           := DontCare
+    io_csr_xcep.valid     := false.B
     when(s1_uop.valid && s1_regs.valid && s1_uop.bits.fuType === FUType.FUT_CSR.asUInt) {
-      s1_regs.ready := true.B
-      s1_uop.ready  := true.B
+      s1_regs.ready := Mux(
+        s1_uop.bits.exuCmd === EXU_CACOP.asUInt,
+        Mux(s1_uop.bits.cacopCode(2, 0) === 0.U, io_icache_cacop.ready, io_dcache_cacop.ready),
+        true.B,
+      )
+      s1_uop.ready := Mux(
+        s1_uop.bits.exuCmd === EXU_CACOP.asUInt,
+        Mux(s1_uop.bits.cacopCode(2, 0) === 0.U, io_icache_cacop.ready, io_dcache_cacop.ready),
+        true.B,
+      )
+
+      val isIPE = (io_csr_access.crmd.plv =/= 0.U) &&
+        !(s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(4, 3) === CACOP_HIT_INV.asUInt)
 
       io_csr_access.we := EXUType.csrWen(s1_uop.bits.exuCmd)
 
       io_tlb_cmd.cmd := s1_uop.bits.exuCmd
 
-      io_icache_cacop.valid := s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(2, 0) === 0.U
+      io_icache_cacop.valid := s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(2, 0) === 0.U && !isIPE
       io_icache_cacop.cacop := s1_uop.bits.cacopCode(4, 3)
       io_icache_cacop.vaddr := s1_regs.bits(0) + s1_uop.bits.imm
-      io_dcache_cacop.valid := s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(2, 0) === 1.U
+      io_dcache_cacop.valid := s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(2, 0) === 1.U && !isIPE
       io_dcache_cacop.cacop := s1_uop.bits.cacopCode(4, 3)
       io_dcache_cacop.vaddr := s1_regs.bits(0) + s1_uop.bits.imm
 
@@ -518,6 +542,7 @@ class UniqueExeUnit(
       io_csr_xcep.valid := MuxCase(
         false.B,
         Seq(
+          isIPE                 -> true.B,
           io_icache_cacop.valid -> (io_icache_cacop.ready && io_icache_cacop.exception.valid),
           io_dcache_cacop.valid -> (io_dcache_cacop.ready && io_dcache_cacop.exception.valid),
         ),
@@ -527,6 +552,7 @@ class UniqueExeUnit(
       io_csr_xcep.bits.ecode := MuxCase(
         DontCare,
         Seq(
+          isIPE                 -> ECODE.IPE.asUInt,
           io_icache_cacop.valid -> io_icache_cacop.exception.bits,
           io_dcache_cacop.valid -> io_dcache_cacop.exception.bits,
         ),

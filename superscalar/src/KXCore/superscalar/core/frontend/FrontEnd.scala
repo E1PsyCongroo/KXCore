@@ -123,7 +123,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheArb.io.in(0).bits.vaddr  := io.icacheCacop.vaddr
   io.icacheCacop.ready           := icacheArb.io.in(0).ready
   io.icacheCacop.exception.valid := io.icacheCacop.cacop === CACOP_HIT_INV.asUInt && io.itlbResp.exception.valid
-  io.icacheCacop.exception.bits  := io.itlbResp.exception.bits
+  io.icacheCacop.exception.bits  := Mux(io.itlbResp.exception.bits === ECODE.PIF.asUInt, ECODE.PIL.asUInt, io.itlbResp.exception.bits)
 
   icacheArb.io.in(1).valid      := true.B
   icacheArb.io.in(1).bits.cacop := CACOP_HIT_READ.asUInt
@@ -239,7 +239,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   icacheStage1.io.resp.ready := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
   bpuStage1.io.resp.ready    := icacheStage1to2.io.req.ready && pipeStage1to2.io.in.ready
 
-  pipeStage1to2.io.in.valid          := s1_fire
+  pipeStage1to2.io.in.valid          := s1_fire && s1_cacop === CACOP_HIT_READ.asUInt
   pipeStage1to2.io.in.bits.fetchPC   := s1_fetchPC
   pipeStage1to2.io.in.bits.exception := s1_exception
   pipeStage1to2.io.in.bits.icache    := s1_icacheResp
@@ -257,7 +257,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   }
   def isB(inst: UInt): Bool = {
     import Instruction._
-    Seq(B, BL).map(_.inst === inst).reduce(_ || _)
+    Seq(B, BL, IDLE).map(_.inst === inst).reduce(_ || _)
   }
   def isJIRL(inst: UInt): Bool = {
     inst === Instruction.JIRL.inst
@@ -267,7 +267,7 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   }
   def isJmp(inst: UInt): Bool = {
     import Instruction._
-    isB(inst) || isJIRL(inst) || isIDLE(inst)
+    isB(inst) || isJIRL(inst)
   }
   def isCall(inst: UInt): Bool = {
     import Instruction._
@@ -351,15 +351,15 @@ class FrontEnd(implicit params: CoreParameters) extends Module {
   stage2Redirect.bits := MuxCase(
     s2_pcs(fetchWidth),
     Seq(
-      !s2_cfiMask.orR       -> s2_pcs(fetchWidth),
-      s2_retMask(s2_cfiIdx) -> ras.io.read.addr,
+      !s2_cfiMask.orR        -> s2_pcs(fetchWidth),
+      s2_retMask(s2_cfiIdx)  -> ras.io.read.addr,
+      s2_idleMask(s2_cfiIdx) -> s2_pcs(s2_cfiIdx),
       s2_bMask(s2_cfiIdx) -> (s2_pcs(s2_cfiIdx) + Sext(
         Cat(s2_fetchBundle.insts(s2_cfiIdx)(9, 0), s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)),
         32,
       )),
       s2_brMask(s2_cfiIdx)   -> (s2_pcs(s2_cfiIdx) + Sext(Cat(s2_fetchBundle.insts(s2_cfiIdx)(25, 10), 0.U(2.W)), 32)),
       s2_jirlMask(s2_cfiIdx) -> s2_bpuResp.pred(s2_cfiIdx).target.bits,
-      s2_idleMask(s2_cfiIdx) -> s2_pcs(s2_cfiIdx),
     ),
   )
 
