@@ -121,7 +121,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
   val crmd      = RegInit(("b1000").U.asTypeOf(new CRMD)) // da=1
   val prmd      = RegInit(0.U.asTypeOf(new PRMD))
-  val euen      = RegInit(0.U(32.W))
+  val euen      = Reg(new EUEN)
   val ecfg      = RegInit(0.U.asTypeOf(new ECFG))
   val estat     = RegInit(0.U.asTypeOf(new ESTAT))
   val era       = Reg(UInt(32.W))
@@ -132,9 +132,9 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   val tlbelo0   = Reg(new TLBELO(params.commonParams.paddrWidth))
   val tlbelo1   = Reg(new TLBELO(params.commonParams.paddrWidth))
   val asid      = RegInit(0xa0000.U.asTypeOf(new ASID))
-  val pgdl      = RegInit(0.U(32.W))
-  val pgdh      = RegInit(0.U(32.W))
-  val pgd       = RegInit(0.U(32.W))
+  val pgdl      = Reg(new PGD)
+  val pgdh      = Reg(new PGD)
+  val pgd       = Wire(UInt(32.W))
   val cpuid     = WireInit(0.U(32.W))
   val saved     = Reg(Vec(4, UInt(32.W)))
   val tid       = Reg(UInt(32.W))
@@ -240,7 +240,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
 
     crmd.value := Mux(io.waddr === CSRAddr.CRMD.U, crmd.write(wdata | (crmd.value & ~io.wmask)), crmd.value)
     prmd.value := Mux(io.waddr === CSRAddr.PRMD.U, prmd.write(wdata | (prmd.value & ~io.wmask)), prmd.value)
-    euen       := Mux(io.waddr === CSRAddr.EUEN.U, wdata | (euen & ~io.wmask) & ~1.U(32.W), euen)
+    euen.value := Mux(io.waddr === CSRAddr.EUEN.U, euen.write(wdata | (euen.value & ~io.wmask)), euen.value)
 
     ecfg.value := Mux(io.waddr === CSRAddr.ECFG.U, ecfg.write(wdata | (ecfg.value & !io.wmask)), ecfg.value)
     estat := Mux(
@@ -253,31 +253,32 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
     eentry.value    := Mux(io.waddr === CSRAddr.EENTRY.U, eentry.write(wdata | (eentry.value & !io.wmask)), eentry.value)
     tlbrentry.value := Mux(io.waddr === CSRAddr.TLBRENTRY.U, tlbrentry.write(wdata | (tlbrentry.value & !io.wmask)), tlbrentry.value)
 
-    asid.value    := Mux(io.waddr === CSRAddr.ASID.U, asid.write(wdata | (asid.value & ~io.wmask)), asid.value)
     tlbidx.value  := Mux(io.waddr === CSRAddr.TLBIDX.U, tlbidx.write(wdata | (tlbidx.value & ~io.wmask)), tlbidx.value)
     tlbehi.value  := Mux(io.waddr === CSRAddr.TLBEHI.U, tlbehi.write(wdata | (tlbehi.value & ~io.wmask)), tlbehi.value)
     tlbelo0.value := Mux(io.waddr === CSRAddr.TLBELO0.U, tlbelo0.write(wdata | (tlbelo0.value & ~io.wmask)), tlbelo0.value)
     tlbelo1.value := Mux(io.waddr === CSRAddr.TLBELO1.U, tlbelo1.write(wdata | (tlbelo1.value & ~io.wmask)), tlbelo1.value)
+
+    asid.value := Mux(io.waddr === CSRAddr.ASID.U, asid.write(wdata | (asid.value & ~io.wmask)), asid.value)
+    pgdh.value := Mux(io.waddr === CSRAddr.PGDH.U, pgdh.write(wdata | (pgdh.value & ~io.wmask)), pgdh.value)
+    pgdl.value := Mux(io.waddr === CSRAddr.PGDL.U, pgdl.write(wdata | (pgdl.value & ~io.wmask)), pgdl.value)
 
     tid := Mux(io.waddr === CSRAddr.TID.U, wdata | (tid & ~io.wmask), tid)
 
     klo   := Mux(io.waddr === CSRAddr.LLBCTL.U, wdata(2) && io.wmask(2), klo)
     llbit := Mux(io.waddr === CSRAddr.LLBCTL.U && wdata(1) && io.wmask(1), false.B, llbit)
 
-    pgdh := Mux(io.waddr === CSRAddr.PGDH.U, wdata | (pgdh & ~io.wmask) & ~0xfff.U(32.W), pgdh)
-    pgdl := Mux(io.waddr === CSRAddr.PGDL.U, wdata | (pgdl & ~io.wmask) & ~0xfff.U(32.W), pgdl)
-    pgd  := Mux(io.waddr === CSRAddr.PGD.U, wdata | (pgd & ~io.wmask) & ~0xfff.U(32.W), pgd)
   }.otherwise {
     estat := estat.set_sample(io.interrupt.externel_sample).set_tis(timer_interrupt_pending)
   }
   /* ------ Write Logic ------ */
 
   /* ------ Read Logic ------ */
+  pgd := Mux(badv(31), pgdh.value, pgdl.value)
   io.rdata := MuxLookup(io.raddr, 0.U(32.W))(
     Seq(
       CSRAddr.CRMD.U      -> crmd.value,
       CSRAddr.PRMD.U      -> prmd.value,
-      CSRAddr.EUEN.U      -> euen,
+      CSRAddr.EUEN.U      -> euen.value,
       CSRAddr.ECFG.U      -> ecfg.value,
       CSRAddr.ESTAT.U     -> estat.value,
       CSRAddr.ERA.U       -> era,
@@ -288,8 +289,9 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
       CSRAddr.TLBELO0.U   -> tlbelo0.value,
       CSRAddr.TLBELO1.U   -> tlbelo1.value,
       CSRAddr.ASID.U      -> asid.value,
-      CSRAddr.PGDL.U      -> pgdl,
-      CSRAddr.PGDH.U      -> pgdh,
+      CSRAddr.PGDL.U      -> pgdl.value,
+      CSRAddr.PGDH.U      -> pgdh.value,
+      CSRAddr.PGD.U       -> pgd,
       CSRAddr.CPUID.U     -> cpuid,
       CSRAddr.SAVED0.U    -> saved(0),
       CSRAddr.SAVED1.U    -> saved(1),
@@ -314,7 +316,7 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   /* ------ Debug Info ------ */
   io.debug.crmd      := crmd.value
   io.debug.prmd      := prmd.value
-  io.debug.euen      := euen
+  io.debug.euen      := euen.value
   io.debug.ecfg      := ecfg.value
   io.debug.estat     := estat.value
   io.debug.era       := era
@@ -325,8 +327,8 @@ class CSRUnit(implicit params: CoreParameters) extends Module {
   io.debug.tlbelo0   := tlbelo0.value
   io.debug.tlbelo1   := tlbelo1.value
   io.debug.asid      := asid.value
-  io.debug.pgdl      := pgdl
-  io.debug.pgdh      := pgdh
+  io.debug.pgdl      := pgdl.value
+  io.debug.pgdh      := pgdh.value
   io.debug.pgd       := pgd
   io.debug.cpuid     := cpuid
   io.debug.saved0    := saved(0)

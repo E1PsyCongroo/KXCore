@@ -19,13 +19,13 @@ object IQTypeControlField extends DecodeField[Instruction, UInt] {
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU             => BitPat(IQType.IQT_MEM.asUInt)
       case DBAR | IBAR | LL_W | SC_W                                           => BitPat(IQType.IQT_MEM.asUInt)
       case MUL_W | MULH_W | MULH_WU | DIV_W | MOD_W | DIV_WU | MOD_WU          => BitPat(IQType.IQT_UNQ.asUInt)
-      case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(IQType.IQT_UNQ.asUInt)
-      case BREAK | SYSCALL | ERTN                                              => BitPat(IQType.IQT_UNQ.asUInt)
+      case CPUCFG                                                              => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(IQType.IQT_UNQ.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(IQType.IQT_UNQ.asUInt)
+      case ERTN | IDLE                                                         => BitPat(IQType.IQT_UNQ.asUInt)
       case CACOP                                                               => BitPat(IQType.IQT_UNQ.asUInt)
-      case CPUCFG                                                              => BitPat(IQType.IQT_UNQ.asUInt)
+      case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(IQType.IQT_UNQ.asUInt)
       case _                                                                   => BitPat(IQType.IQT_INT.asUInt)
     }
   }
@@ -37,32 +37,18 @@ object FUTypeControlField extends DecodeField[Instruction, UInt] {
   def genTable(op: Instruction): BitPat = {
     op match {
       case JIRL | B | BL | BEQ | BNE | BLT | BGE | BLTU | BGEU                 => BitPat(FUType.FUT_CFI.asUInt)
-      case IDLE                                                                => BitPat(FUType.FUT_CFI.asUInt)
-      case BREAK | SYSCALL | ERTN | CPUCFG                                     => BitPat(FUType.FUT_CSR.asUInt)
+      case CPUCFG                                                              => BitPat(FUType.FUT_CSR.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(FUType.FUT_CSR.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(FUType.FUT_CSR.asUInt)
-      case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(FUType.FUT_CSR.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(FUType.FUT_CSR.asUInt)
       case CACOP                                                               => BitPat(FUType.FUT_CSR.asUInt)
+      case ERTN | IDLE                                                         => BitPat(FUType.FUT_CSR.asUInt)
+      case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(FUType.FUT_CSR.asUInt)
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU             => BitPat(FUType.FUT_MEM.asUInt)
-      case DBAR | IBAR | LL_W | SC_W                                           => BitPat(FUType.FUT_MEM.asUInt)
+      case LL_W | SC_W | DBAR | IBAR                                           => BitPat(FUType.FUT_MEM.asUInt)
       case MUL_W | MULH_W | MULH_WU                                            => BitPat(FUType.FUT_MUL.asUInt)
       case DIV_W | MOD_W | DIV_WU | MOD_WU                                     => BitPat(FUType.FUT_DIV.asUInt)
       case _                                                                   => BitPat(FUType.FUT_ALU.asUInt)
-    }
-  }
-}
-
-object CFITypeControlField extends DecodeField[Instruction, UInt] {
-  def name             = "Control flow instruction type control field"
-  def chiselType: UInt = UInt(CFIType.getWidth.W)
-  def genTable(op: Instruction): BitPat = {
-    op match {
-      case B | BL                              => BitPat(CFIType.CFI_B.asUInt)
-      case IDLE                                => BitPat(CFIType.CFI_B.asUInt)
-      case JIRL                                => BitPat(CFIType.CFI_JIRL.asUInt)
-      case BNE | BEQ | BLT | BGE | BLTU | BGEU => BitPat(CFIType.CFI_BR.asUInt)
-      case _                                   => BitPat(CFIType.CFI_NONE.asUInt)
     }
   }
 }
@@ -79,8 +65,7 @@ object IMMTypeControlField extends DecodeField[Instruction, UInt] {
       case ANDI | ORI | XORI                                             => BitPat(IMMType.IMM_12U.asUInt)
       case LL_W | SC_W                                                   => BitPat(IMMType.IMM_14.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat(IMMType.IMM_14U.asUInt)
-      case SYSCALL | BREAK | DBAR | IBAR | IDLE                          => BitPat(IMMType.IMM_15U.asUInt)
-      case INVTLB                                                        => BitPat(IMMType.IMM_15U.asUInt)
+      case BREAK | SYSCALL | DBAR | IBAR | INVTLB | IDLE                 => BitPat(IMMType.IMM_15U.asUInt)
       case JIRL | BEQ | BNE | BLT | BGE | BLTU | BGEU                    => BitPat(IMMType.IMM_16.asUInt)
       case LU12I_W | PCADDU12I                                           => BitPat(IMMType.IMM_20.asUInt)
       case B | BL                                                        => BitPat(IMMType.IMM_26.asUInt)
@@ -163,9 +148,7 @@ object EXUOPControlField extends DecodeField[Instruction, UInt] {
       case LD_HU                                                               => BitPat(EXUType.EXU_LDHU.asUInt)
       case LL_W                                                                => BitPat(EXUType.EXU_LLW.asUInt)
       case SC_W                                                                => BitPat(EXUType.EXU_SCW.asUInt)
-      case CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3                       => BitPat(EXUType.EXU_CSRXCHG.asUInt)
-      case CSRRD                                                               => BitPat(EXUType.EXU_CSRRD.asUInt)
-      case CSRWR                                                               => BitPat(EXUType.EXU_CSRWR.asUInt)
+      case CPUCFG                                                              => BitPat(EXUType.EXU_CPUCFG.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(EXUType.EXU_RDCNTID.asUInt)
       case RDCNTVL_W                                                           => BitPat(EXUType.EXU_RDCNTVL.asUInt)
       case RDCNTVH_W                                                           => BitPat(EXUType.EXU_RDCNTVH.asUInt)
@@ -175,7 +158,11 @@ object EXUOPControlField extends DecodeField[Instruction, UInt] {
       case TLBFILL                                                             => BitPat(EXUType.EXU_TLBFILL.asUInt)
       case INVTLB                                                              => BitPat(EXUType.EXU_INVTLB.asUInt)
       case CACOP                                                               => BitPat(EXUType.EXU_CACOP.asUInt)
-      case CPUCFG                                                              => BitPat(EXUType.EXU_CPUCFG.asUInt)
+      case ERTN                                                                => BitPat(EXUType.EXU_ERTN.asUInt)
+      case IDLE                                                                => BitPat(EXUType.EXU_IDLE.asUInt)
+      case CSRRD                                                               => BitPat(EXUType.EXU_CSRRD.asUInt)
+      case CSRWR                                                               => BitPat(EXUType.EXU_CSRWR.asUInt)
+      case CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3                       => BitPat(EXUType.EXU_CSRXCHG.asUInt)
       case _                                                                   => dc
     }
   }
@@ -191,11 +178,13 @@ object RS1ControlField extends DecodeField[Instruction, UInt] {
   def genTable(op: Instruction): BitPat = {
     op match {
       case LU12I_W | PCADDU12I | B | BL                                        => BitPat(RS1From.rs1None.asUInt)
-      case SYSCALL | BREAK | ERTN | DBAR | IBAR | IDLE                         => BitPat(RS1From.rs1None.asUInt)
-      case CSRRD | CSRWR                                                       => BitPat(RS1From.rs1None.asUInt)
+      case BREAK | SYSCALL                                                     => BitPat(RS1From.rs1None.asUInt)
+      case DBAR | IBAR                                                         => BitPat(RS1From.rs1None.asUInt)
+      case ERTN | IDLE                                                         => BitPat(RS1From.rs1None.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(RS1From.rs1None.asUInt)
       case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS1From.rs1None.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL                                   => BitPat(RS1From.rs1None.asUInt)
+      case CSRRD | CSRWR                                                       => BitPat(RS1From.rs1None.asUInt)
       case _                                                                   => BitPat(RS1From.rs1FromRj.asUInt)
     }
   }
@@ -216,16 +205,18 @@ object RS2ControlField extends DecodeField[Instruction, UInt] {
       case ANDI | ORI | XORI                                                   => BitPat(RS2From.rs2None.asUInt)
       case SLLI_W | SRLI_W | SRAI_W                                            => BitPat(RS2From.rs2None.asUInt)
       case B | BL | JIRL                                                       => BitPat(RS2From.rs2None.asUInt)
+      case BREAK | SYSCALL                                                     => BitPat(RS2From.rs2None.asUInt)
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                                  => BitPat(RS2From.rs2None.asUInt)
-      case LL_W | CACOP                                                        => BitPat(RS2From.rs2None.asUInt)
-      case SYSCALL | BREAK | ERTN | DBAR | IBAR | IDLE | CPUCFG                => BitPat(RS2From.rs2None.asUInt)
+      case LL_W | DBAR | IBAR                                                  => BitPat(RS2From.rs2None.asUInt)
+      case CPUCFG                                                              => BitPat(RS2From.rs2None.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(RS2From.rs2None.asUInt)
       case RDCNTVL_W | RDCNTVH_W                                               => BitPat(RS2From.rs2None.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL                                   => BitPat(RS2From.rs2None.asUInt)
+      case ERTN | IDLE                                                         => BitPat(RS2From.rs2None.asUInt)
+      case CACOP                                                               => BitPat(RS2From.rs2None.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(RS2From.rs2FromRd.asUInt)
       case BEQ | BNE | BLT | BGE | BLTU | BGEU                                 => BitPat(RS2From.rs2FromRd.asUInt)
-      case ST_B | ST_H | ST_W                                                  => BitPat(RS2From.rs2FromRd.asUInt)
-      case SC_W                                                                => BitPat(RS2From.rs2FromRd.asUInt)
+      case ST_B | ST_H | ST_W | SC_W                                           => BitPat(RS2From.rs2FromRd.asUInt)
       case _                                                                   => BitPat(RS2From.rs2FromRk.asUInt)
     }
   }
@@ -251,9 +242,9 @@ object WBControlField extends DecodeField[Instruction, UInt] {
       case JIRL                                                                => BitPat(WBDest.destRd.asUInt)
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                                  => BitPat(WBDest.destRd.asUInt)
       case LL_W | SC_W                                                         => BitPat(WBDest.destRd.asUInt)
+      case CPUCFG                                                              => BitPat(WBDest.destRd.asUInt)
       case RDCNTVL_W | RDCNTVH_W                                               => BitPat(WBDest.destRd.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(WBDest.destRd.asUInt)
-      case CPUCFG                                                              => BitPat(WBDest.destRd.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(WBDest.destRj.asUInt)
       case BL                                                                  => BitPat(WBDest.destR1.asUInt)
       case _                                                                   => BitPat(WBDest.destNone.asUInt)
@@ -269,12 +260,11 @@ object UniqControlField extends DecodeField[Instruction, Bool] {
       /* need to keep sequential read, bus read may have side effects */
       case LD_B | LD_H | LD_W | LD_BU | LD_HU                    => BitPat.Y(1)
       case ST_B | ST_H | ST_W                                    => BitPat.Y(1)
-      case LL_W | SC_W                                           => BitPat.Y(1)
-      case DBAR | IBAR                                           => BitPat.Y(1)
-      case CACOP                                                 => BitPat.Y(1)
+      case LL_W | SC_W | DBAR | IBAR                             => BitPat.Y(1)
       case RDCNTVL_W | RDCNTVH_W                                 => BitPat.Y(1)
-      case CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat.Y(1)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB            => BitPat.Y(1)
+      case CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3 => BitPat.Y(1)
+      case CACOP                                                 => BitPat.Y(1)
       case _                                                     => BitPat.N(1)
     }
   }
@@ -297,8 +287,8 @@ object BusyControlField extends DecodeField[Instruction, Bool] {
   def chiselType: Bool = Bool()
   def genTable(op: Instruction): BitPat = {
     op match {
-      case ERTN | DBAR | IBAR | IDLE => BitPat.N(1)
-      case _                         => BitPat.Y(1)
+      case DBAR | IBAR => BitPat.N(1)
+      case _           => BitPat.Y(1)
     }
   }
 }
@@ -398,7 +388,6 @@ class Decoder(implicit params: CoreParameters) extends Module {
     Seq(
       IQTypeControlField,
       FUTypeControlField,
-      CFITypeControlField,
       IMMTypeControlField,
       OP1SelControlField,
       OP2SelControlField,
