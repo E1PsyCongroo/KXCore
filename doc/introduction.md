@@ -80,7 +80,7 @@ ICache是高性能指令获取的关键组件，采用3级流水线设计。我�
 
 ##### 分支预测器系统器 (BranchPredictor)
    
-我们实现了先进的混合分支预测器架构，包含了分支指令缓冲区(BIM)、分支目标缓冲区(BTB)和目标地址计算三个核心组件。
+实现了先进的混合分支预测器架构，包含了分支指令缓冲区(BIM)、分支目标缓冲区(BTB)和目标地址计算三个核心组件。
    
 **分支指令缓冲区(BIM)** 
 
@@ -122,7 +122,7 @@ io.resp.bits.pred(i).target.bits := Mux(
 
 **预测融合与结果生成**
 
-BIM和BTB想和配合，BIM提供方向预测，BTB提供目标和类型信息。条件分支(`isBr`)需要方向预测，无条件跳转 (`isJmp`)直接跳转，间接跳转结合BTB的目标预测。
+BIM和BTB相互配合，BIM提供方向预测，BTB提供目标和类型信息。如条件分支(`isBr`)需要方向预测，无条件跳转 (`isJmp`)直接跳转，间接跳转结合BTB的目标预测。
 
 ```scala
 io.resp.bits.pred zip bim.io.resp.bits.pred zip btb.io.resp.bits.pred foreach { 
@@ -185,7 +185,7 @@ stage1Redirect.bits := Mux(
 
 #### Stage 2: 预解码阶段 
 
-预解码阶段是KXCore前端设计的核心优化阶段，通过提前识别和处理控制流指令，显著提高分支预测精度和取指效率。
+预解码阶段是KXCore前端设计的核心优化阶段，通过提前识别和处理控制流指令，可以显著提高分支预测精度和取指效率。
 
 ##### 控制流指令识别与分类
 
@@ -380,60 +380,536 @@ for (i <- 0 until 3) {
 
 ![后端架构图](KXCore_BackEnd.png)
 
-#### Stage 0: 译码与重命名1阶段 
+#### Stage 0: 译码与重命名1阶段
+
+译码与重命名1阶段是后端流水线的起始阶段，承担着将前端取指结果转换为后端可执行微操作的核心任务。这一阶段通过精细的指令译码和智能的寄存器重命名机制，为后续的乱序执行奠定了坚实基础。
+
+##### 指令译码系统
+
 **主要模块**：[`Decoder`](../superscalar/src/KXCore/superscalar/core/backend/Decode/Decoder.scala)
 
-- **指令译码**：将LoongArch32指令译码为内部微操作(MicroOp)
-  - 支持算术运算、逻辑运算、访存、分支跳转、CSR操作等指令类型
-  - 通过译码表确定指令的功能单元类型(FUType)和发射队列类型(IQType)
-- **操作数识别**：识别源寄存器(lrs1/lrs2)和目标寄存器(ldst)
-- **功能单元分配**：根据指令类型分配到对应的功能单元
-  - ALU指令 → INT发射队列 → ALU执行单元
-  - 访存指令 → MEM发射队列 → 内存执行单元
-  - 乘除法指令 → UNQ发射队列 → 乘除法执行单元
-  - CSR/系统指令 → UNQ发射队列 → 特殊执行单元
-- **寄存器重命名**：逻辑寄存器到物理寄存器的映射，消除WAR和WAW冲突
+KXCore的指令译码器采用了基于Chisel `DecodeField`的高效译码架构，能够在单周期内完成复杂的LoongArch32指令解析。译码器通过多个并行的控制字段生成器，同时提取指令的各种属性信息，避免了传统译码器的串行瓶颈。
 
-#### Stage 1: 重命名2与分派阶段 
-**主要模块**：[`BasicDispatcher`](../superscalar/src/KXCore/superscalar/core/backend/Dispatch/Dispatcher.scala)、重命名相关模块
+**发射队列类型分配** (`IQTypeControlField`)
 
-- **依赖关系解析**：建立指令间的数据依赖关系，确保正确的执行顺序
-- **物理寄存器分配**：
-  - `RenameFreeList`：维护空闲物理寄存器列表
-  - `RenameMapTable`：维护逻辑寄存器到物理寄存器的映射表
-  - `RenameBusyTable`：跟踪物理寄存器的忙/闲状态
-- **ROB分配**：为每条指令分配重排序缓冲区条目，支持按序提交
-- **发射队列选择**：根据指令的IQType将指令分发到对应发射队列
-  - 采用BasicDispatcher策略，假设最坏情况所有指令都发送到同一个队列
-- **资源可用性检查**：确保有足够的物理寄存器、ROB条目和发射队列空间
+译码器首先根据指令特性将其分配到三个专用发射队列之一。这种分类策略充分考虑了指令的执行特性和资源需求，实现了高效的并行处理：
+
+- **内存发射队列 (IQT_MEM)**：承担所有访存相关指令的调度任务
+  - 加载指令：`LD_B`、`LD_H`、`LD_W`、`LD_BU`、`LD_HU`支持不同数据宽度的内存读取
+  - 存储指令：`ST_B`、`ST_H`、`ST_W`支持精确的内存写入操作
+  - 原子指令：`LL_W`、`SC_W`提供原子性内存访问保证
+  - 内存屏障：`DBAR`、`IBAR`确保内存操作的顺序性
+
+- **特殊发射队列 (IQT_UNQ)**：处理需要特殊资源或顺序执行的指令
+  - 乘除法指令：`MUL_W`、`MULH_W`、`MULH_WU`、`DIV_W`、`MOD_W`、`DIV_WU`、`MOD_WU`
+  - CSR操作：`CSRRD`、`CSRWR`、`CSRXCHG`系列指令管理控制状态寄存器
+  - 系统指令：`BREAK`、`SYSCALL`、`ERTN`处理异常和系统调用
+  - TLB管理：`TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB`
+  - 计数器访问：`RDCNTID_W`、`RDCNTVH_W`、`RDCNTVL_W`
+  - 缓存操作：`CACOP`、`CPUCFG`
+
+- **整数发射队列 (IQT_INT)**：承担高频的整数运算指令
+  - 算术运算：`ADD_W`、`SUB_W`、`ADDI_W`等基础算术操作
+  - 逻辑运算：`AND`、`OR`、`XOR`、`NOR`等位操作
+  - 比较指令：`SLT`、`SLTU`、`SLTI`、`SLTUI`
+  - 移位运算：`SLL_W`、`SRL_W`、`SRA_W`及其立即数版本
+  - 分支指令：`BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`
+  - 跳转指令：`B`、`BL`、`JIRL`
+
+**功能单元类型识别** (`FUTypeControlField`)
+
+在确定发射队列的同时，译码器还精确识别指令所需的功能单元类型，确保指令能够被正确的执行单元处理：
+
+- **ALU功能单元** (`FUT_ALU`)：处理基础的算术逻辑运算
+- **内存功能单元** (`FUT_MEM`)：处理所有内存访问操作
+- **乘法功能单元** (`FUT_MUL`)：专门处理乘法运算
+- **除法功能单元** (`FUT_DIV`)：专门处理除法和取模运算
+- **控制流功能单元** (`FUT_CFI`)：处理分支跳转指令
+- **CSR功能单元** (`FUT_CSR`)：处理系统级操作
+
+**操作数类型解析**
+
+译码器通过精细的操作数分析，为每条指令确定数据来源和目标：
+
+- **第一操作数选择** (`OP1SelControlField`)：
+  - `OP1_RS1`：使用源寄存器1的值
+  - `OP1_PC`：使用程序计数器的值（用于PC相对寻址）
+
+- **第二操作数选择** (`OP2SelControlField`)：
+  - `OP2_RS2`：使用源寄存器2的值
+  - `OP2_IMM`：使用指令中的立即数
+  - `OP2_NEXT`：使用下一条指令地址（用于链接跳转）
+
+**立即数类型识别** (`IMMTypeControlField`)
+
+译码器根据指令格式自动识别立即数的类型和长度：
+- `IMM_5U`：5位无符号立即数（移位量）
+- `IMM_12`：12位有符号立即数（算术运算）
+- `IMM_12U`：12位无符号立即数（逻辑运算）
+- `IMM_14`：14位立即数（链式载存）
+- `IMM_16`：16位立即数（分支偏移）
+- `IMM_20`：20位立即数（高位立即数）
+- `IMM_26`：26位立即数（长跳转）
+
+**源寄存器有效性检测**
+
+译码器智能识别每条指令的寄存器使用模式，避免不必要的寄存器读取：
+
+- **RS1控制** (`RS1ControlField`)：识别是否需要读取源寄存器1
+- **RS2控制** (`RS2ControlField`)：识别是否需要读取源寄存器2，区分从Rk或Rd字段读取
+
+**目标寄存器写回控制** (`WBControlField`)
+
+译码器确定指令的写回目标，支持多种写回模式：
+- `destRd`：写回到Rd寄存器（大多数指令）
+- `destR1`：写回到R1寄存器（链接跳转BL）
+- `destRj`：写回到Rj寄存器（RDCNTID指令）
+- `destNone`：不写回任何寄存器（存储、分支等）
+
+**特殊指令属性标记**
+
+译码器还为指令附加重要的执行属性：
+- **唯一性标记** (`UniqControlField`)：标识需要顺序执行的指令
+- **提交刷新标记** (`CommitFlushControlField`)：标识提交时需要刷新流水线的指令
+- **忙表标记** (`BusyControlField`)：标识是否需要在忙表中跟踪
+
+##### 寄存器重命名系统
+
+寄存器重命名是KXCore实现乱序执行的核心机制，通过将逻辑寄存器动态映射到物理寄存器，消除了指令间的假依赖关系，大幅提升了指令级并行度。
+
+**重命名映射表** (`RenameMapTable`)
+
+重命名映射表维护着逻辑寄存器到物理寄存器的动态映射关系。KXCore采用了双映射表设计，分别维护推测状态和提交状态：
+
+- **推测映射表** (`renMapTable`)：反映当前推测执行状态下的寄存器映射
+- **提交映射表** (`comMapTable`)：反映已提交指令的确定寄存器映射
+
+这种设计在分支预测错误或异常发生时，能够快速恢复到正确的寄存器状态。映射表支持每周期2条指令的并行重命名，通过内部旁路机制解决同周期内的依赖关系：
+
+```scala
+// 内部旁路逻辑：如果前面的指令正在重命名同一个逻辑寄存器
+io.mapResps(i).prs1 := (0 until coreWidth).foldLeft(renMapTable(io.mapReqs(i).lrs1))((p, k) =>
+  Mux(bypass.B && io.renRemapReqs(k).valid && io.renRemapReqs(k).ldst === io.mapReqs(i).lrs1, 
+      io.renRemapReqs(k).pdst, p))
+```
+
+**空闲物理寄存器管理** (`RenameFreeList`)
+
+空闲列表维护可分配的物理寄存器池，采用位向量表示法实现高效的分配和回收：
+
+- **分配机制**：使用`SelectFirstN`电路从空闲位向量中选择前N个可用寄存器
+- **推测分配跟踪**：`specAllocList`跟踪推测分配的寄存器，支持分支预测错误时的回滚
+- **双重回收**：支持正常提交回收和推测回收两种模式
+
+空闲列表的初始状态将前32个物理寄存器映射到对应的逻辑寄存器，其余48个寄存器加入空闲池，为重命名提供充足的资源：
+
+```scala
+val freeList = RegInit(UInt(pregNum.W), Cat(~(0.U((pregNum - lregNum).W)), 0.U(lregNum.W)))
+```
+
+**忙表管理** (`RenameBusyTable`)
+
+忙表跟踪每个物理寄存器的数据就绪状态，为发射队列的依赖检测提供关键信息：
+
+- **忙状态设置**：指令分配新的物理寄存器时，立即将其标记为忙
+- **忙状态清除**：执行单元写回结果时，清除对应物理寄存器的忙标记
+- **旁路检测**：支持同周期内的依赖检测和旁路
+
+忙表的更新采用了写回优先的策略，确保数据就绪信息的及时性：
+
+```scala
+// 先清除写回的寄存器忙状态，再设置新分配的寄存器忙状态
+val busyTableWb = busyTable & ~(io.wbPdsts zip io.wbValids)
+  .map { case (pdst, valid) => UIntToOH(pdst) & Fill(pregNum, valid.asUInt) }
+  .reduce(_ | _)
+```
+
+##### 微操作生成与数据流
+
+经过译码和重命名处理后，每条指令被转换为包含完整执行信息的微操作(`MicroOp`)。微操作包含了指令执行所需的全部信息：
+
+- **基础信息**：程序计数器、原始指令编码、ROB索引、FTQ索引
+- **重命名结果**：物理源寄存器号(`prs1`/`prs2`)、物理目标寄存器号(`pdst`)、陈旧物理寄存器号(`stalePdst`)
+- **控制信息**：功能单元类型、发射队列类型、执行命令、立即数
+- **状态标记**：忙表查询结果、特殊属性标记
+
+**数据依赖解析**
+
+在重命名阶段，系统已经将数据依赖关系转换为物理寄存器依赖。忙表查询结果直接反映了操作数的就绪状态，为后续的发射调度提供精确的依赖信息。
+
+**流水线控制**
+
+Stage 0支持完整的流水线控制机制：
+- **异常处理**：译码异常时停止后续处理，保持流水线状态
+- **分支预测错误恢复**：通过重命名状态回滚快速恢复正确状态
+- **资源冲突处理**：当物理寄存器不足时，暂停新指令的重命名
+
+#### Stage 1: 重命名2与分派阶段
+
+重命名2与分派阶段是后端流水线中承上启下的关键环节，承担着完成寄存器重命名过程并将微操作精确分发到相应执行资源的重要使命。这一阶段通过精细的资源管理和智能的分派策略，确保了后续乱序执行的高效进行。
+
+**主要模块**：[`BasicDispatcher`](../superscalar/src/KXCore/superscalar/core/backend/Dispatch/Dispatcher.scala)、重命名相关模块、[`ReorderBuffer`](../superscalar/src/KXCore/superscalar/core/backend/ReorderBuffer.scala)
+
+##### 物理寄存器分配完成
+
+在Stage 1中，重命名系统完成对需要写回寄存器的指令的物理寄存器分配过程。这个过程涉及多个关键组件的协调工作：
+
+**空闲寄存器分配机制**
+
+KXCore采用了高效的物理寄存器分配策略，支持每周期为最多2条指令同时分配物理寄存器。分配过程通过以下步骤完成：
+
+- **分配请求生成**：只有目标寄存器非零(`ldst ≠ 0`)的指令才需要分配新的物理寄存器
+- **分配可用性检查**：`RenameFreeList`检查是否有足够的空闲物理寄存器可供分配
+- **物理寄存器分配**：使用`SelectFirstN`电路从空闲位向量中优先选择编号较小的可用寄存器
+
+```scala
+renameFreeList.io.allocPregs(i).ready := disData.bits(i).valid && disData.bits(i).bits.ldst =/= 0.U
+dis_alloc_regs(i) := Mux(
+  renameFreeList.io.allocPregs(i).ready,
+  renameFreeList.io.allocPregs(i).bits,  // 新分配的物理寄存器
+  dis_alloc_regs(i)                      // 保持之前的分配结果
+)
+```
+
+**重命名映射表更新**
+
+分配完物理寄存器后，系统立即更新重命名映射表，建立新的逻辑到物理寄存器映射关系：
+
+```scala
+renameMapTable.io.renRemapReqs(i).valid := disData.bits(i).valid && disData.bits(i).bits.ldst =/= 0.U
+renameMapTable.io.renRemapReqs(i).ldst  := disData.bits(i).bits.ldst  // 逻辑目标寄存器
+renameMapTable.io.renRemapReqs(i).pdst  := disData.bits(i).bits.pdst  // 新的物理寄存器
+```
+
+##### 依赖关系精确解析
+
+Stage 1通过高级的依赖关系解析机制，处理指令间复杂的数据依赖和同周期内的寄存器重命名冲突：
+
+**同周期依赖检测**
+
+当多条指令在同一周期进行重命名时，可能出现后面的指令依赖前面指令的写回结果的情况。KXCore通过精巧的前向传播逻辑解决这一问题：
+
+```scala
+for (j <- 0 until i) {
+  when(decToRen.bits(j).valid) {
+    // 处理写后写依赖 (WAW)：获取最新的陈旧寄存器
+    when(disData.bits(j).bits.ldst === disData.bits(i).bits.ldst) {
+      disData.bits(i).bits.stalePdst := Mux(disUopFireReg(j), dis_alloc_regs(j), disData.bits(j).bits.pdst)
+    }
+    // 处理真依赖 (RAW)：获取最新的源寄存器1
+    when(disData.bits(j).bits.ldst === disData.bits(i).bits.lrs1) {
+      disData.bits(i).bits.prs1 := Mux(disUopFireReg(j), dis_alloc_regs(j), disData.bits(j).bits.pdst)
+    }
+    // 处理真依赖 (RAW)：获取最新的源寄存器2
+    when(disData.bits(j).bits.ldst === disData.bits(i).bits.lrs2) {
+      disData.bits(i).bits.prs2 := Mux(disUopFireReg(j), dis_alloc_regs(j), disData.bits(j).bits.pdst)
+    }
+  }
+}
+```
+
+这种机制确保了即使在同一周期内存在复杂的寄存器依赖关系，每条指令也能获得正确的物理寄存器映射。
+
+**忙表状态查询**
+
+忙表查询为每条指令提供其源操作数的就绪状态信息，这是发射队列进行动态调度的关键依据：
+
+```scala
+renameBusyTable.io.uopReqs(i)    := disData.bits(i).bits  // 提供微操作信息
+renameBusyTable.io.rebusyReqs(i) := disData.bits(i).valid // 标记新分配的寄存器为忙
+
+// 获取操作数就绪状态
+disData.bits(i).bits.prs1Busy := renameBusyTable.io.busyResps(i).prs1Busy
+disData.bits(i).bits.prs2Busy := renameBusyTable.io.busyResps(i).prs2Busy
+```
+
+##### 重排序缓冲区分配
+
+每条指令在分派前必须在重排序缓冲区(ROB)中分配一个条目，以支持按序提交和精确异常处理：
+
+**ROB条目分配策略**
+
+ROB采用了循环队列的管理方式，支持每周期最多2条指令的分配：
+
+- **分配索引计算**：使用头尾指针管理ROB的分配和提交
+- **条目可用性检查**：确保ROB未满且有足够的条目可供分配
+- **异常信息记录**：为可能产生异常的指令预先分配异常处理资源
+
+```scala
+rob.io.alloc(i).valid := disData.bits(i).valid
+rob.io.alloc(i).uop   := disData.bits(i).bits
+
+// ROB分配的条目索引反馈给微操作
+disData.bits(i).bits.robIdx := rob.io.alloc(i).idx
+```
+
+**特殊指令处理**
+
+ROB在分配过程中对特殊指令进行特别处理：
+
+- **异常指令**：提前记录异常信息，便于后续的精确异常处理
+- **刷新指令**：如`ERTN`、`IBAR`等指令标记为需要在提交时刷新流水线
+- **唯一指令**：确保某些需要顺序执行的指令在ROB为空时才能分配
+
+##### 基础分派器机制
+
+**主要模块**：[`BasicDispatcher`](../superscalar/src/KXCore/superscalar/core/backend/Dispatch/Dispatcher.scala)
+
+KXCore采用基础分派器策略，这种设计在简化控制逻辑的同时保证了分派的正确性：
+
+**最坏情况假设策略**
+
+基础分派器采用保守的分派策略，假设最坏情况下所有指令都可能发送到同一个发射队列。这种设计的核心思想是：
+
+- **统一就绪检查**：所有发射队列的就绪信号进行逻辑与运算，只有当所有队列都能接受指令时才允许分派
+- **类型匹配分派**：根据指令的`iqType`字段将其精确分发到对应的发射队列
+- **全局反压处理**：任何一个发射队列的阻塞都会影响整个分派过程
+
+```scala
+val ren_readys = io.dis_uops.map(d => VecInit(d.map(_.ready)).asUInt).reduce(_ & _)
+for (w <- 0 until coreWidth) {
+  io.ren_uops(w).ready := ren_readys(w)  // 全局就绪信号
+}
+
+// 根据IQ类型进行分派
+dis(w).valid := io.ren_uops(w).valid && io.ren_uops(w).bits.iqType === issueParam.iqType
+dis(w).bits  := io.ren_uops(w).bits
+```
+
+**分派流控制**
+
+分派阶段实现了精密的流控制机制，确保在各种资源约束下的正确操作：
+
+**多重约束检查**
+
+每条指令的分派需要满足多个条件：
+
+```scala
+disData.bits(i).valid := decToRen.valid && decToRen.bits(i).valid && !disUopFireReg(i) &&
+  (renameFreeList.io.allocPregs(i).valid || disData.bits(i).bits.ldst === 0.U) &&  // 物理寄存器可用
+  (!disData.bits(i).bits.isUnique || (dis_first_valid_yet && rob.io.empty)) &&     // 唯一指令检查
+  rob.io.alloc(i).ready && dispatcher.io.ren_uops(i).ready && !block_dis           // ROB和分派器就绪
+```
+
+**唯一指令序列化**
+
+对于标记为唯一(`isUnique`)的指令，分派器确保其序列化执行：
+
+- **首指令优先**：只有当前周期的第一条有效指令才能是唯一指令
+- **ROB空检查**：唯一指令只能在ROB为空时分派，确保没有其他指令在执行
+- **后续阻塞**：唯一指令分派后阻塞后续所有指令的分派
+
+**部分分派处理**
+
+当某些指令由于资源不足无法分派时，系统采用部分分派机制：
+
+- **分派掩码记录**：`disUopFireReg`记录哪些指令已经成功分派
+- **剩余指令保持**：未分派的指令保持在Stage 1，等待下一周期的分派机会
+- **状态一致性**：确保部分分派不会破坏寄存器重命名的一致性
+
+##### 资源可用性综合管理
+
+Stage 1作为资源分配的关键阶段，需要综合管理多种硬件资源：
+
+**物理寄存器资源**
+- 监控空闲物理寄存器的数量
+- 预测未来几个周期的寄存器需求
+- 在资源不足时暂停新指令的分派
+
+**ROB条目资源**
+- 跟踪ROB的填充状态
+- 确保有足够的条目支持新指令分配
+- 处理ROB满时的反压机制
+
+**发射队列容量**
+- 监控各个发射队列的可用空间
+- 根据指令类型分布预测队列负载
+- 在队列满时选择性阻塞相应类型指令
+
+这种综合的资源管理策略确保了Stage 1能够在各种工作负载下稳定运行，为后续的乱序执行阶段提供高质量的微操作流。通过精密的依赖解析、智能的资源分配和灵活的流控制，Stage 1成功地将顺序的指令流转换为可以高效并行处理的微操作序列。
 
 #### Stage 2: 发射阶段
-**主要模块**：发射单元 ([`IssueUnit`](../superscalar/src/KXCore/superscalar/core/backend/Issue/IssueUnit.scala))
 
-KXCore配置了3个专用发射队列，采用乱序发射策略：
+发射阶段是我们KXCore处理器实现乱序执行的核心所在，通过精心设计的发射单元架构，我们成功地将顺序分派的微操作转换为可以乱序并行执行的指令流。在这一阶段，我们采用了基于数据流驱动的动态调度策略，让处理器能够充分挖掘指令级并行性。
 
-1. **内存发射队列 (MEM IQ)**：
-   - 处理所有访存指令 (LD_B/LD_H/LD_W/ST_B/ST_H/ST_W等)
-   - 发射宽度：1，队列深度：12
-   - 支持地址计算和数据转发
-   
-2. **特殊发射队列 (UNQ IQ)**：
-   - 处理特殊指令：
-     - 乘除法指令 (MUL_W/MULH_W/DIV_W/MOD_W等)
-     - CSR操作 (CSRRD/CSRWR/CSRXCHG系列)
-     - 系统指令 (BREAK/SYSCALL/ERTN)
-     - 计数器指令 (RDCNTID_W/RDCNTVH_W/RDCNTVL_W)
-   - 发射宽度：1，队列深度：12
-   
-3. **整数发射队列 (INT IQ)**：
-   - 处理整数运算指令 (ADD/SUB/AND/OR/XOR/SLT等)
-   - 发射宽度：2，队列深度：20
-   - 支持双发射，提高整数运算吞吐量
+**主要模块**：发射单元 ([`IssueUnit`](../superscalar/src/KXCore/superscalar/core/backend/Issue/IssueUnit.scala))、发射槽位 ([`IssueSlot`](../superscalar/src/KXCore/superscalar/core/backend/Issue/IssueSlot.scala))
 
-**发射机制**：
-- 基于数据依赖的动态调度
-- 支持唤醒机制，当操作数就绪时唤醒等待的指令
-- 每个发射队列独立管理，避免队列间冲突
+##### 我们的三路发射队列架构
+
+我们在KXCore中设计了3个专用发射队列，每个队列都针对不同类型的指令进行了专门优化。这种分离式设计让我们能够为不同的指令类型提供最适合的调度策略和资源配置。
+
+**内存发射队列 (MEM IQ)**
+
+我们为内存访问指令专门设计了一个发射队列，深度为12个条目，发射宽度为1。我们选择这样的配置是因为内存指令通常具有更长的执行延迟，需要更深的队列来缓冲等待的指令：
+
+- **处理指令类型**：我们将所有访存相关指令都路由到这个队列
+  - 加载指令：`LD_B`、`LD_H`、`LD_W`、`LD_BU`、`LD_HU`
+  - 存储指令：`ST_B`、`ST_H`、`ST_W`
+  - 原子指令：`LL_W`、`SC_W`提供原子内存访问
+  - 内存屏障：`DBAR`、`IBAR`确保内存顺序
+
+- **特殊优化**：我们为内存队列实现了地址计算的预处理和数据转发机制，最大化内存访问的效率
+
+**特殊发射队列 (UNQ IQ)**
+
+我们为需要特殊处理或长延迟的指令设计了这个队列，同样配置为深度12、发射宽度1：
+
+- **乘除法指令**：`MUL_W`、`MULH_W`、`MULH_WU`、`DIV_W`、`MOD_W`、`DIV_WU`、`MOD_WU`
+- **系统级操作**：`CSRRD`、`CSRWR`、`CSRXCHG`系列CSR指令
+- **特权指令**：`BREAK`、`SYSCALL`、`ERTN`等异常处理指令
+- **TLB管理**：`TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB`
+- **计数器访问**：`RDCNTID_W`、`RDCNTVH_W`、`RDCNTVL_W`
+- **缓存操作**：`CACOP`、`CPUCFG`
+
+我们将这些指令归类到特殊队列是因为它们通常需要独占某些硬件资源，或者具有特殊的执行语义。
+
+**整数发射队列 (INT IQ)**
+
+这是我们处理器中最繁忙的发射队列，我们为其配置了最大的深度（20个条目）和最高的发射宽度（2路发射）：
+
+- **处理指令类型**：我们将高频的整数运算指令都分配到这个队列
+  - 算术运算：`ADD_W`、`SUB_W`、`ADDI_W`等
+  - 逻辑运算：`AND`、`OR`、`XOR`、`NOR`、`ANDI`、`ORI`、`XORI`
+  - 比较指令：`SLT`、`SLTU`、`SLTI`、`SLTUI`
+  - 移位运算：`SLL_W`、`SRL_W`、`SRA_W`及其立即数版本
+  - 分支指令：`BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`
+  - 跳转指令：`B`、`BL`、`JIRL`
+
+- **双发射优化**：我们实现了同时发射2条整数指令的能力，这让我们能够充分利用两个ALU执行单元的并行处理能力
+
+##### 我们的发射槽位设计
+
+**发射槽位核心机制** ([`IssueSlot`](../superscalar/src/KXCore/superscalar/core/backend/Issue/IssueSlot.scala))
+
+我们为每个发射队列条目设计了智能的发射槽位，每个槽位都是一个独立的状态机，能够自主地管理指令的生命周期：
+
+**操作数就绪检测**
+
+我们在每个发射槽位中实现了精确的操作数就绪检测机制。每个槽位维护两个就绪位：`p1`（源寄存器1就绪）和`p2`（源寄存器2就绪）：
+
+```scala
+when(io.in_uop.valid) {
+  p1 := io.in_uop.bits.lrs1 === 0.U || !io.in_uop.bits.prs1Busy  // R0或不忙
+  p2 := io.in_uop.bits.lrs2 === 0.U || !io.in_uop.bits.prs2Busy  // R0或不忙
+}
+```
+
+我们的设计考虑了LoongArch架构中R0寄存器恒为0的特性，对于使用R0作为源寄存器的指令，我们直接将其标记为就绪。
+
+**唤醒机制实现**
+
+我们实现了高效的唤醒传播网络，当执行单元完成计算并写回结果时，所有等待该寄存器的指令会在同一周期被唤醒：
+
+```scala
+for (i <- 0 until wbPortNum) {
+  when(io.wakeup_ports(i).valid && (io.wakeup_ports(i).bits === next_uop.prs1)) {
+    p1 := true.B  // 源寄存器1就绪
+  }
+  when(io.wakeup_ports(i).valid && (io.wakeup_ports(i).bits === next_uop.prs2)) {
+    p2 := true.B  // 源寄存器2就绪
+  }
+}
+```
+
+我们的唤醒网络连接了所有的写回端口，确保任何执行单元的写回都能立即传播到所有等待的指令。
+
+**优先级发射请求**
+
+我们在发射槽位中实现了智能的优先级机制，对于控制流指令给予更高的发射优先级：
+
+```scala
+val high_priority = slot_uop.isB || slot_uop.isBr || slot_uop.isJirl
+io.request_hp := io.request && high_priority
+```
+
+这种设计让我们能够优先处理分支和跳转指令，减少分支预测错误时的恢复延迟。
+
+##### 我们的动态调度算法
+
+**年龄矩阵调度策略**
+
+我们采用了基于年龄的调度策略，确保老指令优先获得发射机会。在我们的`IssueUnitCollapsing`实现中，我们使用压缩队列的方式管理指令的相对年龄：
+
+**压缩队列机制**
+
+我们设计的压缩队列能够自动消除发射后留下的空隙，保持指令的相对顺序：
+
+```scala
+val vacants = issue_slots.map(!_.valid) ++ io.dis_uops.map(!_.valid)
+// 计算每个条目需要向前移动的距离
+for (i <- 1 until numEntries + dispatchWidth) {
+  shamts_oh(i) := SaturatingCounterOH(shamts_oh(i - 1), vacants(i - 1), maxShift)
+}
+```
+
+我们的压缩机制确保了队列中的指令能够自动向队头移动，老指令始终保持在较前的位置。
+
+**功能单元匹配发射**
+
+我们实现了智能的功能单元匹配算法，确保指令只会发射到能够处理它的执行单元：
+
+```scala
+for (w <- 0 until issueWidth) {
+  val can_allocate = (issue_slots(i).uop.fuType & io.fu_types(w)) =/= 0.U
+  when(requests(i) && !uop_issued && can_allocate && !port_issued(w)) {
+    issue_slots(i).grant := io.iss_uops(w).ready
+    io.iss_uops(w).valid := requests(i)
+    io.iss_uops(w).bits  := issue_slots(i).uop
+  }
+}
+```
+
+我们的算法确保每个发射端口只会被分配一条指令，同时每条指令只会发射到兼容的执行单元。
+
+##### 我们的流水线控制机制
+
+**流水线刷新处理**
+
+当分支预测错误或异常发生时，我们需要快速清空发射队列中的错误路径指令：
+
+```scala
+valid := MuxCase(
+  valid,
+  Seq(
+    io.kill                    -> false.B,  // 流水线刷新，清空所有条目
+    (io.grant || io.clear)     -> false.B,  // 指令发射或移动，清空当前条目
+  )
+)
+```
+
+我们的设计确保在流水线刷新时能够在单周期内清空所有发射队列，为新的正确路径指令腾出空间。
+
+**背压处理机制**
+
+我们实现了完整的背压处理机制，当执行单元无法接受新指令时，发射队列会暂停发射：
+
+```scala
+val will_be_available = RegNext(
+  VecInit((issue_slots zip issue_slots_will_be_valid).map { case (slot, will_be_valid) =>
+    (!will_be_valid || slot.clear) && !slot.in_uop.valid
+  })
+)
+val num_available = PopCount(will_be_available)
+for (w <- 0 until dispatchWidth) {
+  io.dis_uops(w).ready := num_available > w.U  // 根据可用空间决定是否接受新指令
+}
+```
+
+##### 我们的性能优化策略
+
+**分离式队列设计优势**
+
+我们采用分离式发射队列设计的主要优势在于：
+
+- **专门化优化**：我们能够为不同类型的指令提供最适合的队列深度和发射宽度
+- **减少冲突**：我们避免了不同类型指令争夺同一发射资源的问题
+- **简化控制**：我们能够为每个队列实现最优的调度策略
+
+**唤醒延迟优化**
+
+我们的唤醒网络设计最小化了从写回到唤醒的延迟，实现了单周期的唤醒传播。这让我们能够在指令完成执行的下一个周期就发射依赖指令，大大提高了处理器的吞吐量。
+
+通过这种精心设计的发射架构，我们的KXCore处理器能够在保证正确性的前提下，最大化地挖掘指令级并行性，为后续的执行阶段提供充足的指令流。
 
 #### Stage 3: 执行阶段
 **主要模块**：执行单元 ([`ExecutionUnit`](../superscalar/src/KXCore/superscalar/core/backend/Execute/ExecutionUnit.scala))
