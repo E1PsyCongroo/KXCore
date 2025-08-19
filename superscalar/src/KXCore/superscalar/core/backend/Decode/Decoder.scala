@@ -18,13 +18,13 @@ object IQTypeControlField extends DecodeField[Instruction, UInt] {
     op match {
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU             => BitPat(IQType.IQT_MEM.asUInt)
       case DBAR | IBAR | LL_W | SC_W                                           => BitPat(IQType.IQT_MEM.asUInt)
+      case CACOP                                                               => BitPat(IQType.IQT_MEM.asUInt)
       case MUL_W | MULH_W | MULH_WU | DIV_W | MOD_W | DIV_WU | MOD_WU          => BitPat(IQType.IQT_UNQ.asUInt)
       case CPUCFG                                                              => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(IQType.IQT_UNQ.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(IQType.IQT_UNQ.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(IQType.IQT_UNQ.asUInt)
       case ERTN | IDLE                                                         => BitPat(IQType.IQT_UNQ.asUInt)
-      case CACOP                                                               => BitPat(IQType.IQT_UNQ.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(IQType.IQT_UNQ.asUInt)
       case _                                                                   => BitPat(IQType.IQT_INT.asUInt)
     }
@@ -41,11 +41,11 @@ object FUTypeControlField extends DecodeField[Instruction, UInt] {
       case RDCNTID_W_0 | RDCNTID_W_1 | RDCNTID_W_2 | RDCNTID_W_3 | RDCNTID_W_4 => BitPat(FUType.FUT_CSR.asUInt)
       case RDCNTVH_W | RDCNTVL_W                                               => BitPat(FUType.FUT_CSR.asUInt)
       case TLBSRCH | TLBRD | TLBWR | TLBFILL | INVTLB                          => BitPat(FUType.FUT_CSR.asUInt)
-      case CACOP                                                               => BitPat(FUType.FUT_CSR.asUInt)
       case ERTN | IDLE                                                         => BitPat(FUType.FUT_CSR.asUInt)
       case CSRRD | CSRWR | CSRXCHG_0 | CSRXCHG_1 | CSRXCHG_2 | CSRXCHG_3       => BitPat(FUType.FUT_CSR.asUInt)
       case LD_B | LD_H | LD_W | ST_B | ST_H | ST_W | LD_BU | LD_HU             => BitPat(FUType.FUT_MEM.asUInt)
       case LL_W | SC_W | DBAR | IBAR                                           => BitPat(FUType.FUT_MEM.asUInt)
+      case CACOP                                                               => BitPat(FUType.FUT_MEM.asUInt)
       case MUL_W | MULH_W | MULH_WU                                            => BitPat(FUType.FUT_MUL.asUInt)
       case DIV_W | MOD_W | DIV_WU | MOD_WU                                     => BitPat(FUType.FUT_DIV.asUInt)
       case _                                                                   => BitPat(FUType.FUT_ALU.asUInt)
@@ -402,7 +402,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
   )
 
   val NOP     = "b0000_001010_000000000000_00000_00000".U(instWidth.W)
-  val unImpls = Seq(PRELD, CACOP)
+  val unImpls = Seq(PRELD)
 
   for (i <- 0 until coreWidth) {
     val ine = !possiblePatterns.map(_.inst === io.req(i).inst).reduce(_ || _) ||

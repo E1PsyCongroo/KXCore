@@ -93,10 +93,8 @@ class Core(implicit params: CoreParameters) extends Module {
   axiAribter.io.in(1) <> frontend.io.axi
   axiAribter.io.out   <> io.axi
 
-  frontend.io.icacheClear       := backend.io.icacheClear
-  frontend.io.icacheCacop.valid := backend.io.icacheCacop.valid
-  // disable cacop
-  frontend.io.icacheCacop.valid      := false.B
+  frontend.io.icacheClear            := backend.io.icacheClear
+  frontend.io.icacheCacop.valid      := backend.io.icacheCacop.valid
   frontend.io.icacheCacop.bits.cacop := backend.io.icacheCacop.bits.cacop
   frontend.io.icacheCacop.bits.vaddr := backend.io.icacheCacop.bits.vaddr
   frontend.io.icacheCacop.bits.paddr := backend.io.icacheCacop.bits.paddr
@@ -119,8 +117,6 @@ class Core(implicit params: CoreParameters) extends Module {
   backend.io.ftqResps(1)       := frontend.io.ftqResps(1)
   backend.io.ftqResps(2)       := frontend.io.ftqResps(2)
   backend.io.icacheCacop.ready := frontend.io.icacheCacop.ready
-  // disable cacop
-  backend.io.icacheCacop.ready := true.B
 
   io.ws_valid := false.B
   io.rf_rdata := 0.U

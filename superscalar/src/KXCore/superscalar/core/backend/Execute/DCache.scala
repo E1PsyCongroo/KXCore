@@ -77,10 +77,10 @@ object DCache {
     import backendParams.{dcacheParams}
     import dcacheParams._
     require(paddrWidth == axiParams.addrBits)
-    require(dcacheParams.blockBits % axiParams.dataBits == 0)
-    require(dcacheParams.blockBits % commonParams.dataWidth == 0)
+    require(blockBits % axiParams.dataBits == 0)
+    require(blockBits % commonParams.dataWidth == 0)
 
-    private val maxBurstLen = dcacheParams.blockBits / axiParams.dataBits
+    private val maxBurstLen = blockBits / axiParams.dataBits
 
     val io = IO(new Bundle {
       val axi = new AXIBundle(axiParams)

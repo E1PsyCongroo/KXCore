@@ -152,7 +152,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
 
   val s1_use_icache = s1_is_icacop && !s1_exception.valid
   val s1_use_dcache = !(s1_uop.bits.exuCmd === EXU_CACOP.asUInt && !s1_is_dcacop) &&
-    !(s1_is_sc && io_csr_access.llbit) && !s1_exception.valid
+    !(s1_is_sc && !io_csr_access.llbit) && !s1_exception.valid
   val s1_use_uop1to2 = WireInit(true.B)
 
   val s1_fire = s1_uop.valid && s1_regs.valid &&
@@ -211,7 +211,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
       EXU_LDBU -> Fill(24, 0.U(1.W)) ## s2_lshift(7, 0),
     ).map { case (key, data) => (RegEnable(s1_uop.bits.exuCmd, s1_fire) === key.asUInt, data) },
   )
-  val s2_use_dcache = RegEnable(s1_use_dcache, s1_fire)
+  val s2_use_dcache = RegEnable(s1_use_dcache && !s1_is_dcacop, s1_fire)
   val s2_is_ll      = RegEnable(s1_is_ll, s1_fire)
   val s2_is_sc      = RegEnable(s1_is_sc, s1_fire)
   val s2_fire       = s2_uop.valid && (!s2_use_dcache || dcache.io.resp.valid)
