@@ -29,17 +29,18 @@ object EXUType extends ChiselEnum {
   def EXU_DIVU  = EXU_SLTU
   def EXU_MODU  = EXU_OR
 
-  val EXU_LDB  = EXU_SLL
-  val EXU_LDH  = EXU_EQ
-  val EXU_LDBU = EXU_SRL
-  val EXU_LDHU = EXU_SRA
-  val EXU_LDW  = EXU_NEQ
-  val EXU_LLW  = EXU_ADD
-  val EXU_IBAR = EXU_XOR
-  val EXU_STB  = EXU_SUB
-  val EXU_STH  = EXU_SLT
-  val EXU_STW  = EXU_SLTU
-  val EXU_SCW  = EXU_OR
+  val EXU_LDB   = EXU_SLL
+  val EXU_LDH   = EXU_EQ
+  val EXU_LDBU  = EXU_SRL
+  val EXU_LDHU  = EXU_SRA
+  val EXU_LDW   = EXU_NEQ
+  val EXU_LLW   = EXU_ADD
+  val EXU_IBAR  = EXU_XOR
+  val EXU_CACOP = EXU_AND
+  val EXU_STB   = EXU_SUB
+  val EXU_STH   = EXU_SLT
+  val EXU_STW   = EXU_SLTU
+  val EXU_SCW   = EXU_OR
 
   val EXU_CPUCFG  = EXU_SLL
   val EXU_TLBNONE = EXU_SLL
@@ -51,12 +52,11 @@ object EXUType extends ChiselEnum {
   val EXU_TLBWR   = EXU_XOR
   val EXU_TLBFILL = EXU_AND
   val EXU_INVTLB  = EXU_SUB
-  val EXU_CACOP   = EXU_SLT
-  val EXU_ERTN    = EXU_SLTU
-  val EXU_IDLE    = EXU_OR
-  val EXU_CSRRD   = EXU_NOR
-  val EXU_CSRXCHG = EXU_SGEU
-  val EXU_CSRWR   = Value("b1111".U)
+  val EXU_ERTN    = EXU_SLT
+  val EXU_IDLE    = EXU_SLTU
+  val EXU_CSRRD   = EXU_OR
+  val EXU_CSRXCHG = EXU_NOR
+  val EXU_CSRWR   = EXU_SGE
 
   def isSub(cmd: UInt)           = cmd(3)
   def isCmp(cmd: UInt)           = cmd(3) & (cmd(0) ^ cmd(1))
@@ -68,7 +68,7 @@ object EXUType extends ChiselEnum {
   def mul_divUnsigned(cmd: UInt) = cmd(1)
   def ismulh_mod(cmd: UInt)      = cmd(0)
   def unqPriv(cmd: UInt)         = cmd(3) || cmd(2)
-  def csrWen(cmd: UInt)          = cmd(3) & cmd(2) & cmd(1)
+  def csrWen(cmd: UInt)          = cmd(3) & cmd(2)
   def isSotre(cmd: UInt)         = cmd(3)
 }
 

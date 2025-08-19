@@ -23,7 +23,7 @@ class BackEndIO(implicit params: CoreParameters) extends Bundle {
   val ftqReqs     = Output(Vec(3, UInt(ftqIdxWidth.W)))
   val ftqResps    = Input(Vec(3, new FTQInfo))
   val icacheClear = Output(Bool())
-  val icacheCacop = new CacheCACOPIO
+  val icacheCacop = Decoupled(new CacheCACOPIO)
   val tlbCmd      = Output(new TLBCmdIO)
   val commit      = Valid(UInt(ftqIdxWidth.W))
   val redirect    = Output(new RoBRedirectIO)
@@ -199,31 +199,28 @@ class BackEnd(implicit params: CoreParameters) extends Module {
   dispatcher.io.dis_uops(2) <> intIssUnit.io.dis_uops
 
   // execute
-  memIssUnit.io.iss_uops(0)   <> memExeUnit.io_iss_uop
-  io.axi                      <> memExeUnit.io_axi
-  memExeUnit.io_dcache_cacop  <> unqExeUnit.io_dcache_cacop.get
-  io.dtlbReq                  := memExeUnit.io_dtlb_req
-  memExeUnit.io_dtlb_resp     := io.dtlbResp
-  io.csr_access.set_llbit     := memExeUnit.io_csr_llbit.set
-  io.csr_access.clr_llbit     := memExeUnit.io_csr_llbit.clr
-  memExeUnit.io_csr_llbit.bit := io.csr_access.llbit
+  memIssUnit.io.iss_uops(0)      <> memExeUnit.io_iss_uop
+  io.axi                         <> memExeUnit.io_axi
+  io.dtlbReq                     := memExeUnit.io_dtlb_req
+  memExeUnit.io_dtlb_resp        := io.dtlbResp
+  io.icacheCacop                 <> memExeUnit.io_icache_cacop
+  memExeUnit.io_csr_access.crmd  := io.csr_access.crmd
+  memExeUnit.io_csr_access.llbit := io.csr_access.llbit
+  io.csr_access.set_llbit        := memExeUnit.io_csr_access.set_llbit
+  io.csr_access.clr_llbit        := memExeUnit.io_csr_access.clr_llbit
 
-  unqIssUnit.io.iss_uops(0)          <> unqExeUnit.io_iss_uop
-  io.icacheCacop                     <> unqExeUnit.io_icache_cacop.get
-  io.csr_access.raddr                := unqExeUnit.io_csr_access.get.raddr
-  unqExeUnit.io_csr_access.get.rdata := io.csr_access.rdata
-
-  io.csr_access.we    := unqExeUnit.io_csr_access.get.we
-  io.csr_access.waddr := unqExeUnit.io_csr_access.get.waddr
-  io.csr_access.wdata := unqExeUnit.io_csr_access.get.wdata
-  io.csr_access.wmask := unqExeUnit.io_csr_access.get.wmask
-
+  unqIssUnit.io.iss_uops(0)              <> unqExeUnit.io_iss_uop
+  io.csr_access.raddr                    := unqExeUnit.io_csr_access.get.raddr
+  unqExeUnit.io_csr_access.get.rdata     := io.csr_access.rdata
+  io.csr_access.we                       := unqExeUnit.io_csr_access.get.we
+  io.csr_access.waddr                    := unqExeUnit.io_csr_access.get.waddr
+  io.csr_access.wdata                    := unqExeUnit.io_csr_access.get.wdata
+  io.csr_access.wmask                    := unqExeUnit.io_csr_access.get.wmask
   unqExeUnit.io_csr_access.get.crmd      := io.csr_access.crmd
   unqExeUnit.io_csr_access.get.counterID := io.csr_access.counterID
   unqExeUnit.io_csr_access.get.cntvh     := io.csr_access.cntvh
   unqExeUnit.io_csr_access.get.cntvl     := io.csr_access.cntvl
-
-  io.tlbCmd := unqExeUnit.io_tlb_cmd.get
+  io.tlbCmd                              := unqExeUnit.io_tlb_cmd.get
 
   intIssUnit.io.iss_uops zip aluExeUnits map { case (iss_uop, exu) => iss_uop <> exu.io_iss_uop }
 

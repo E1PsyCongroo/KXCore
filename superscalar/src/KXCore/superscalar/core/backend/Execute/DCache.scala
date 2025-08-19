@@ -83,25 +83,21 @@ object DCache {
     private val maxBurstLen = dcacheParams.blockBits / axiParams.dataBits
 
     val io = IO(new Bundle {
-      val axi   = new AXIBundle(axiParams)
-      val flush = Input(Bool())
+      val axi = new AXIBundle(axiParams)
       val read = new Bundle {
-        val req = Flipped(Decoupled(new Bundle {
-          val paddr = UInt(paddrWidth.W)
-          val len   = UInt(axiParams.lenBits.W)
-        }))
-        val resp = Decoupled(new Bundle {
-          val data = UInt(blockBits.W)
-        })
+        val valid = Input(Bool())
+        val paddr = Input(UInt(paddrWidth.W))
+        val len   = Input(UInt(axiParams.lenBits.W))
+        val ready = Output(Bool())
+        val data  = Output(UInt(blockBits.W))
       }
       val write = new Bundle {
-        val req = Flipped(Decoupled(new Bundle {
-          val paddr = UInt(paddrWidth.W)
-          val data  = UInt(blockBits.W)
-          val wmask = UInt(axiParams.wstrBits.W)
-          val len   = UInt(axiParams.lenBits.W)
-        }))
-        val resp = Decoupled(new Bundle {})
+        val valid = Input(Bool())
+        val paddr = Input(UInt(paddrWidth.W))
+        val len   = Input(UInt(axiParams.lenBits.W))
+        val data  = Input(UInt(blockBits.W))
+        val wmask = Input(UInt(axiParams.wstrBits.W))
+        val ready = Output(Bool())
       }
     })
 
@@ -110,102 +106,92 @@ object DCache {
     val read_state          = RegInit(sHandleReadReq)
     val arfire              = io.axi.ar.fire
     val rfire               = io.axi.r.fire && io.axi.r.bits.id === id.U
-    val read_burst_len      = RegEnable(io.read.req.bits.len, io.read.req.fire)
-    val (read_burst_cnt, _) = Counter(0 to maxBurstLen, rfire, arfire)
-    val read_burst_fin      = read_burst_len === (read_burst_cnt - 1.U)
+    val read_burst_len      = io.read.len
+    val (read_burst_cnt, _) = Counter(0 until maxBurstLen, rfire, arfire)
+    val read_burst_fin      = Reg(Bool())
     val read_data_vec       = Reg(Vec(maxBurstLen, UInt(commonParams.dataWidth.W)))
     read_data_vec(read_burst_cnt) := Mux(
       rfire,
       io.axi.r.bits.data,
       read_data_vec(read_burst_cnt),
     )
+    read_burst_fin := Mux(arfire, 0.B, Mux(rfire, io.axi.r.bits.last.asBool, read_burst_fin))
 
     read_state := MuxLookup(read_state, sHandleReadReq)(
       Seq(
-        sHandleReadReq -> Mux(io.read.req.fire, sBusRead, sHandleReadReq),
+        sHandleReadReq -> Mux(arfire, sBusRead, sHandleReadReq),
         sBusRead -> MuxCase(
           sBusRead,
           Seq(
-            io.flush            -> sBusReadIgnore,
-            (io.read.resp.fire) -> sHandleReadReq,
+            !io.read.valid                   -> sBusReadIgnore,
+            (io.read.valid && io.read.ready) -> sHandleReadReq,
           ),
         ),
         sBusReadIgnore -> Mux(read_burst_fin, sHandleReadReq, sBusReadIgnore),
       ),
     )
 
-    io.axi.ar.valid      := (read_state === sHandleReadReq && io.read.req.valid)
-    io.axi.ar.bits.addr  := io.read.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
+    io.axi.ar.valid      := (read_state === sHandleReadReq && io.read.valid)
+    io.axi.ar.bits.addr  := io.read.paddr
     io.axi.ar.bits.id    := id.U
-    io.axi.ar.bits.len   := io.read.req.bits.len
+    io.axi.ar.bits.len   := read_burst_len
     io.axi.ar.bits.size  := log2Ceil(axiParams.dataBits / 8).U
     io.axi.ar.bits.burst := AXIParameters.BURST_INCR
     io.axi.ar.bits.lock  := 0.U
     io.axi.ar.bits.cache := 0.U
     io.axi.ar.bits.prot  := 0.U
 
-    io.read.req.ready := (read_state === sHandleReadReq && io.axi.ar.ready)
-
     io.axi.r.ready := ((read_state === sBusRead) || (read_state === sBusReadIgnore)) && !read_burst_fin
 
-    io.read.resp.valid     := !io.flush && (read_state === sBusRead) && read_burst_fin
-    io.read.resp.bits.data := read_data_vec.asUInt
+    io.read.ready := read_state === sBusRead && read_burst_fin
+    io.read.data  := read_data_vec.asUInt
 
-    val sHandleWriteReq :: sBusWrite :: sBusWriteIgnore :: Nil = Enum(3)
+    val sHandleWriteReq :: sBusWrite :: Nil = Enum(2)
 
     val write_state          = RegInit(sHandleReadReq)
-    val awfire               = io.axi.w.fire
+    val awfire               = io.axi.aw.fire
     val wfire                = io.axi.w.fire
     val bfire                = io.axi.b.fire && io.axi.b.bits.id === id.U
-    val write_burst_len      = RegEnable(io.write.req.bits.len, io.write.req.fire)
-    val (write_burst_cnt, _) = Counter(0 to maxBurstLen, wfire, awfire)
+    val write_burst_len      = io.write.len
+    val (write_burst_cnt, _) = Counter(0 until maxBurstLen, wfire, awfire)
     val write_burst_last     = write_burst_len === write_burst_cnt
-    val write_burst_fin      = write_burst_len === (write_burst_cnt - 1.U)
-    val write_data_vec = RegEnable(
-      VecInit((0 until maxBurstLen).map { i =>
-        io.write.req.bits.data(commonParams.dataWidth * (i + 1) - 1, commonParams.dataWidth * i)
-      }),
-      io.write.req.fire,
-    )
+    val write_burst_fin      = Reg(Bool())
+    val write_data_vec = VecInit((0 until maxBurstLen).map { i =>
+      io.write.data(commonParams.dataWidth * (i + 1) - 1, commonParams.dataWidth * i)
+    })
     val write_data = write_data_vec(write_burst_cnt)
-    val write_mask = RegEnable(io.write.req.bits.wmask, io.write.req.fire)
+    val write_mask = io.write.wmask
+    write_burst_fin := Mux(awfire, 0.B, Mux(wfire, io.axi.w.bits.last.asBool, write_burst_fin))
+
+    when(write_state === sBusWrite) { assert(io.write.valid, "[DCache]: axi write is irrevocable ") }
 
     write_state := MuxLookup(write_state, sHandleWriteReq)(
       Seq(
-        sHandleWriteReq -> Mux(io.write.req.fire, sBusWrite, sHandleWriteReq),
-        sBusWrite -> MuxCase(
-          sBusWrite,
-          Seq(
-            io.flush             -> sBusWriteIgnore,
-            (io.write.resp.fire) -> sHandleWriteReq,
-          ),
-        ),
-        sBusWriteIgnore -> Mux(bfire, sHandleWriteReq, sBusWriteIgnore),
+        sHandleWriteReq -> Mux(awfire, sBusWrite, sHandleWriteReq),
+        sBusWrite       -> Mux(io.write.valid && io.write.ready, sHandleWriteReq, sBusWrite),
       ),
     )
 
-    io.axi.aw.valid      := (write_state === sHandleWriteReq && io.write.req.valid)
-    io.axi.aw.bits.addr  := io.write.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
+    io.axi.aw.valid      := (write_state === sHandleWriteReq && io.write.valid)
+    io.axi.aw.bits.addr  := io.write.paddr
     io.axi.aw.bits.id    := id.U
-    io.axi.aw.bits.len   := io.write.req.bits.len
+    io.axi.aw.bits.len   := write_burst_len
     io.axi.aw.bits.size  := log2Ceil(axiParams.dataBits / 8).U
     io.axi.aw.bits.burst := AXIParameters.BURST_INCR
     io.axi.aw.bits.lock  := 0.U
     io.axi.aw.bits.cache := 0.U
     io.axi.aw.bits.prot  := 0.U
 
-    io.write.req.ready := (write_state === sHandleWriteReq && io.axi.aw.ready)
-
-    io.axi.w.valid     := (write_state === sBusWrite || write_state === sBusWriteIgnore) && !write_burst_fin
+    io.axi.w.valid     := write_state === sBusWrite && !write_burst_fin
     io.axi.w.bits.id   := id.U
     io.axi.w.bits.last := write_burst_last
     io.axi.w.bits.data := write_data
     io.axi.w.bits.strb := write_mask
 
-    io.axi.b.ready := ((!io.flush && write_state === sBusWrite && io.write.resp.ready) ||
-      (write_state === sBusWriteIgnore)) && write_burst_fin
+    // ignore bresp
+    io.axi.b.ready := true.B
 
-    io.write.resp.valid := !io.flush && (write_state === sBusWrite) && io.axi.b.valid
+    io.write.ready := (write_state === sBusWrite) && write_burst_fin
 
     if (params.debug) {
       dontTouch(read_state)
@@ -373,17 +359,32 @@ object DCache {
         val wmask  = UInt(dataBytes.W)
         val wdata  = UInt(dataWidth.W)
       }))
-      val resp = Decoupled(new Bundle {
-        val data = UInt(dataWidth.W)
-      })
+      val resp = Valid(UInt(dataWidth.W))
     })
 
+    val sIdle :: sCacop :: sUncached :: sLookup :: sMiss :: sRefill :: Nil = Enum(6)
+
+    val axiAdapter = Module(new DCacheAXIAdapter)
+    val storage    = Module(new DCacheStorage)
+    axiAdapter.io.axi <> io.axi
+
+    // storage.io.metaPort.read.en  := io.req.fire
+    // storage.io.metaPort.read.set := getSet(io.req.bits.vaddr)
+    storage.io.metaPort          := DontCare
+    storage.io.metaPort.read.en  := false.B
+    storage.io.metaPort.write.en := false.B
+
+    storage.io.dataPort          := DontCare
+    storage.io.dataPort.read.en  := false.B
+    storage.io.dataPort.write.en := false.B
+
+    val state     = RegInit(sIdle)
     val cacop     = RegEnable(io.req.bits.cacop, io.req.fire)
     val paddr     = RegEnable(io.req.bits.paddr, io.req.fire)
     val isWrite   = RegEnable(io.req.bits.wen, io.req.fire)
     val wmask     = RegEnable(io.req.bits.wmask, io.req.fire)
     val wdata     = RegEnable(io.req.bits.wdata, io.req.fire)
-    val set       = getSet(paddr)
+    val meta      = storage.io.metaPort.read.data
     val tag       = getTag(paddr)
     val idx       = getIdx(paddr)
     val isCache   = cacop === CACOP_NONE.asUInt
@@ -391,7 +392,49 @@ object DCache {
     val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
     val isHitInv  = cacop === CACOP_HIT_INV.asUInt
 
-    val sIdle :: sCacop :: sUncached :: sLoopup :: sMiss :: sRefill :: sWriteCache :: Nil = Enum(7)
+    state := MuxLookup(state, sIdle)(
+      Seq(
+        sIdle -> MuxCase(
+          sIdle,
+          Seq(
+            (io.req.fire && io.req.bits.cacop =/= CACOP_NONE.asUInt)                        -> sCacop,
+            (io.req.fire && io.req.bits.cacop === CACOP_NONE.asUInt && !io.req.bits.cached) -> sUncached,
+            (io.req.fire && io.req.bits.cacop === CACOP_NONE.asUInt && io.req.bits.cached)  -> sLookup,
+          ),
+        ),
+        sCacop    -> sIdle,
+        sUncached -> Mux(io.resp.valid, sIdle, sUncached),
+      ),
+    )
+
+    axiAdapter.io.read.valid := MuxLookup(state, false.B)(
+      Seq(
+        sUncached -> !isWrite,
+      ),
+    )
+    axiAdapter.io.read.len   := Mux(state === sUncached, 0.U, (burstLen - 1).U)
+    axiAdapter.io.read.paddr := paddr
+
+    axiAdapter.io.write.valid := MuxLookup(state, false.B)(
+      Seq(
+        sUncached -> isWrite,
+      ),
+    )
+    axiAdapter.io.write.len   := Mux(state === sUncached, 0.U, (burstLen - 1).U)
+    axiAdapter.io.write.paddr := paddr
+    axiAdapter.io.write.data  := wdata
+    axiAdapter.io.write.wmask := wmask
+
+    io.req.ready := MuxLookup(state, false.B)(
+      Seq(
+        sIdle     -> true.B,
+        sCacop    -> false.B,
+        sUncached -> io.resp.valid,
+      ),
+    )
+
+    io.resp.valid := Mux(state === sUncached, Mux(isWrite, axiAdapter.io.write.ready, axiAdapter.io.read.ready), false.B)
+    io.resp.bits  := Mux(state === sUncached, axiAdapter.io.read.data(dataWidth - 1, 0), 0.U)
   }
 
   // class DCacheStage0to1(implicit paramsV」: CoreParameters) extends Module {
