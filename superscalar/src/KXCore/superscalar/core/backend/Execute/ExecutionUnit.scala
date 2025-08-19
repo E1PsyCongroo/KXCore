@@ -211,6 +211,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
 
   val s2_data = s2_reg.io.out
 
+  lsu.io.flush     := io_kill
   lsu.io.req.valid := s2_data.valid && !s2_data.bits.uop.exception
   lsu.io.req.bits  := s2_data.bits
 

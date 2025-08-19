@@ -17,7 +17,8 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
   import commonParams.{vaddrWidth, paddrWidth, dataWidth}
 
   val io = IO(new Bundle {
-    val axi = new AXIBundle(axiParams)
+    val flush = Input(Bool())
+    val axi   = new AXIBundle(axiParams)
     val llbit = new Bundle {
       val bit = Input(Bool())
       val set = Output(Bool())

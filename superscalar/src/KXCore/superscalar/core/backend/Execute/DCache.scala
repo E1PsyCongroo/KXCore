@@ -70,240 +70,317 @@ object DCache {
     fileName
   }
 
-  // class DCacheAXIAdapter(implicit params: CoreParameters) extends Module {
-  //   import params.{commonParams, backendParams, axiParams}
-  //   import commonParams.{paddrWidth}
-  //   import backendParams.{dcacheParams}
-  //   import dcacheParams._
-  //   require(paddrWidth == axiParams.addrBits)
-  //   require(dcacheParams.blockBits % axiParams.dataBits == 0)
-  //   require(dcacheParams.blockBits % commonParams.dataWidth == 0)
+  class DCacheAXIAdapter(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, backendParams, axiParams}
+    import commonParams.{paddrWidth}
+    import backendParams.{dcacheParams}
+    import dcacheParams._
+    require(paddrWidth == axiParams.addrBits)
+    require(dcacheParams.blockBits % axiParams.dataBits == 0)
+    require(dcacheParams.blockBits % commonParams.dataWidth == 0)
 
-  //   private val maxBurstLen = dcacheParams.blockBits / axiParams.dataBits
+    private val maxBurstLen = dcacheParams.blockBits / axiParams.dataBits
 
-  //   val io = IO(new Bundle {
-  //     val axi   = new AXIBundle(axiParams)
-  //     val flush = Input(Bool())
-  //     val read = new Bundle {
-  //       val req = Flipped(Decoupled(new Bundle {
-  //         val paddr = UInt(paddrWidth.W)
-  //         val len   = UInt(axiParams.lenBits.W)
-  //       }))
-  //       val resp = Decoupled(new Bundle {
-  //         val data = UInt(blockBits.W)
-  //       })
-  //     }
-  //     val write = new Bundle {
-  //       val req = Flipped(Decoupled(new Bundle {
-  //         val paddr = UInt(paddrWidth.W)
-  //         val data  = UInt(blockBits.W)
-  //         val wmask = UInt(axiParams.wstrBits.W) // only used when len = 1
-  //         val len   = UInt(axiParams.lenBits.W)
-  //       }))
-  //       val resp = Decoupled(new Bundle {})
-  //     }
-  //   })
+    val io = IO(new Bundle {
+      val axi   = new AXIBundle(axiParams)
+      val flush = Input(Bool())
+      val read = new Bundle {
+        val req = Flipped(Decoupled(new Bundle {
+          val paddr = UInt(paddrWidth.W)
+          val len   = UInt(axiParams.lenBits.W)
+        }))
+        val resp = Decoupled(new Bundle {
+          val data = UInt(blockBits.W)
+        })
+      }
+      val write = new Bundle {
+        val req = Flipped(Decoupled(new Bundle {
+          val paddr = UInt(paddrWidth.W)
+          val data  = UInt(blockBits.W)
+          val wmask = UInt(axiParams.wstrBits.W)
+          val len   = UInt(axiParams.lenBits.W)
+        }))
+        val resp = Decoupled(new Bundle {})
+      }
+    })
 
-  //   val sHandleReq :: sBusRead :: sBusReadIgnore :: sBusWrite :: sBusWriteIgnore :: Nil = Enum(5)
+    val sHandleReadReq :: sBusRead :: sBusReadIgnore :: Nil = Enum(3)
 
-  //   val state          = RegInit(sHandleReq)
-  //   val isRead         = io.read.req.valid && !io.write.req.valid
-  //   val isWrite        = io.write.req.valid
-  //   val arfire         = io.axi.ar.fire
-  //   val rfire          = io.axi.r.fire && io.axi.r.bits.id === id.U
-  //   val awfire         = io.axi.w.fire
-  //   val wfire          = io.axi.w.fire
-  //   val bfire          = io.axi.b.fire && io.axi.b.bits.id === id.U
-  //   val burst_len      = RegInit(0.U(axiParams.burstBits.W))
-  //   val (burst_cnt, _) = Counter(0 to maxBurstLen, rfire || wfire, arfire || awfire)
-  //   val burst_last     = burst_len === burst_cnt
-  //   val burst_fin      = burst_len === (burst_cnt - 1.U)
-  //   val burst_data     = Reg(UInt(blockBits.W))
-  //   val burst_data_vec = VecInit((0 until maxBurstLen).map { i =>
-  //     burst_data(commonParams.dataWidth * (i + 1) - 1, commonParams.dataWidth * i)
-  //   })
+    val read_state          = RegInit(sHandleReadReq)
+    val arfire              = io.axi.ar.fire
+    val rfire               = io.axi.r.fire && io.axi.r.bits.id === id.U
+    val read_burst_len      = RegEnable(io.read.req.bits.len, io.read.req.fire)
+    val (read_burst_cnt, _) = Counter(0 to maxBurstLen, rfire, arfire)
+    val read_burst_fin      = read_burst_len === (read_burst_cnt - 1.U)
+    val read_data_vec       = Reg(Vec(maxBurstLen, UInt(commonParams.dataWidth.W)))
+    read_data_vec(read_burst_cnt) := Mux(
+      rfire,
+      io.axi.r.bits.data,
+      read_data_vec(read_burst_cnt),
+    )
 
-  //   state := MuxLookup(state, sHandleReq)(
-  //     Seq(
-  //       sHandleReq -> MuxCase(
-  //         sHandleReq,
-  //         Seq(
-  //           (isWrite && awfire) -> sBusWrite,
-  //           (isRead && arfire)  -> sBusRead,
-  //         ),
-  //       ),
-  //       sBusRead -> MuxCase(
-  //         sBusRead,
-  //         Seq(
-  //           io.flush            -> sBusReadIgnore,
-  //           (io.read.resp.fire) -> sHandleReq,
-  //         ),
-  //       ),
-  //       sBusReadIgnore -> Mux(burst_fin, sHandleReq, sBusReadIgnore),
-  //       sBusWrite -> MuxCase(
-  //         sBusWrite,
-  //         Seq(
-  //           io.flush             -> sBusWriteIgnore,
-  //           (io.write.resp.fire) -> sHandleReq,
-  //         ),
-  //       ),
-  //       sBusWriteIgnore -> Mux(burst_fin && bfire, sHandleReq, sBusWriteIgnore),
-  //     ),
-  //   )
+    read_state := MuxLookup(read_state, sHandleReadReq)(
+      Seq(
+        sHandleReadReq -> Mux(io.read.req.fire, sBusRead, sHandleReadReq),
+        sBusRead -> MuxCase(
+          sBusRead,
+          Seq(
+            io.flush            -> sBusReadIgnore,
+            (io.read.resp.fire) -> sHandleReadReq,
+          ),
+        ),
+        sBusReadIgnore -> Mux(read_burst_fin, sHandleReadReq, sBusReadIgnore),
+      ),
+    )
 
-  //   io.axi.ar.valid      := (state === sHandleReq && isRead)
-  //   io.axi.ar.bits.addr  := io.read.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
-  //   io.axi.ar.bits.id    := id.U
-  //   io.axi.ar.bits.len   := io.read.req.bits.len
-  //   io.axi.ar.bits.size  := log2Ceil(axiParams.dataBits / 8).U
-  //   io.axi.ar.bits.burst := AXIParameters.BURST_INCR
-  //   io.axi.ar.bits.lock  := 0.U
-  //   io.axi.ar.bits.cache := 0.U
-  //   io.axi.ar.bits.prot  := 0.U
+    io.axi.ar.valid      := (read_state === sHandleReadReq && io.read.req.valid)
+    io.axi.ar.bits.addr  := io.read.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
+    io.axi.ar.bits.id    := id.U
+    io.axi.ar.bits.len   := io.read.req.bits.len
+    io.axi.ar.bits.size  := log2Ceil(axiParams.dataBits / 8).U
+    io.axi.ar.bits.burst := AXIParameters.BURST_INCR
+    io.axi.ar.bits.lock  := 0.U
+    io.axi.ar.bits.cache := 0.U
+    io.axi.ar.bits.prot  := 0.U
 
-  //   io.axi.r.ready := !burst_fin && ((state === sBusRead) || (state === sBusReadIgnore))
+    io.read.req.ready := (read_state === sHandleReadReq && io.axi.ar.ready)
 
-  //   io.axi.aw.valid      := (state === sHandleReq && isWrite)
-  //   io.axi.aw.bits.addr  := io.write.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
-  //   io.axi.ar.bits.id    := id.U
-  //   io.axi.ar.bits.len   := io.write.req.bits.len
-  //   io.axi.ar.bits.size  := log2Ceil(axiParams.dataBits / 8).U
-  //   io.axi.ar.bits.burst := AXIParameters.BURST_INCR
-  //   io.axi.ar.bits.lock  := 0.U
-  //   io.axi.ar.bits.cache := 0.U
-  //   io.axi.ar.bits.prot  := 0.U
+    io.axi.r.ready := ((read_state === sBusRead) || (read_state === sBusReadIgnore)) && !read_burst_fin
 
-  //   io.axi.w.valid     := !burst_fin && (state === sBusWrite || state === sBusWriteIgnore)
-  //   io.axi.w.bits.id   := id.U
-  //   io.axi.w.bits.last := burst_last
-  //   io.axi.w.bits.data := DontCare
+    io.read.resp.valid     := !io.flush && (read_state === sBusRead) && read_burst_fin
+    io.read.resp.bits.data := read_data_vec.asUInt
 
-  //   io.axi.b.ready := burst_fin && ((state === sBusWrite && io.write.resp.ready) || (state === sBusWriteIgnore))
-  // }
+    val sHandleWriteReq :: sBusWrite :: sBusWriteIgnore :: Nil = Enum(3)
 
-  // class DCacheStorage(implicit params: CoreParameters) extends Module {
-  //   import params.{commonParams, backendParams}
-  //   import commonParams.{vaddrWidth, paddrWidth}
-  //   import backendParams.{dcacheParams}
-  //   import dcacheParams._
-  //   private val metaTagInitFile = generateMetaTagHexFile
+    val write_state          = RegInit(sHandleReadReq)
+    val awfire               = io.axi.w.fire
+    val wfire                = io.axi.w.fire
+    val bfire                = io.axi.b.fire && io.axi.b.bits.id === id.U
+    val write_burst_len      = RegEnable(io.write.req.bits.len, io.write.req.fire)
+    val (write_burst_cnt, _) = Counter(0 to maxBurstLen, wfire, awfire)
+    val write_burst_last     = write_burst_len === write_burst_cnt
+    val write_burst_fin      = write_burst_len === (write_burst_cnt - 1.U)
+    val write_data_vec = RegEnable(
+      VecInit((0 until maxBurstLen).map { i =>
+        io.write.req.bits.data(commonParams.dataWidth * (i + 1) - 1, commonParams.dataWidth * i)
+      }),
+      io.write.req.fire,
+    )
+    val write_data = write_data_vec(write_burst_cnt)
+    val write_mask = RegEnable(io.write.req.bits.wmask, io.write.req.fire)
 
-  //   val io = IO(new Bundle {
-  //     val metaPort = new Bundle {
-  //       val read = new Bundle {
-  //         val en   = Input(Bool())
-  //         val set  = Input(UInt(setWidth.W))
-  //         val data = Output(Vec(nWays, new DCacheMeta))
-  //       }
-  //       val write = new Bundle {
-  //         val en   = Input(Bool())
-  //         val set  = Input(UInt(setWidth.W))
-  //         val way  = Input(UInt(wayWidth.W))
-  //         val data = Input(new DCacheMeta)
-  //       }
-  //     }
-  //     val dataPort = new Bundle {
-  //       val read = new Bundle {
-  //         val en   = Input(Bool())
-  //         val set  = Input(UInt(setWidth.W))
-  //         val way  = Input(UInt(wayWidth.W))
-  //         val data = Output(UInt(blockBits.W))
-  //       }
-  //       val write = new Bundle {
-  //         val en   = Input(Bool())
-  //         val set  = Input(UInt(setWidth.W))
-  //         val way  = Input(UInt(wayWidth.W))
-  //         val mask = Input(UInt((blockBits / 8).W))
-  //         val data = Input(UInt(blockBits.W))
-  //       }
-  //     }
-  //   })
+    write_state := MuxLookup(write_state, sHandleWriteReq)(
+      Seq(
+        sHandleWriteReq -> Mux(io.write.req.fire, sBusWrite, sHandleWriteReq),
+        sBusWrite -> MuxCase(
+          sBusWrite,
+          Seq(
+            io.flush             -> sBusWriteIgnore,
+            (io.write.resp.fire) -> sHandleWriteReq,
+          ),
+        ),
+        sBusWriteIgnore -> Mux(bfire, sHandleWriteReq, sBusWriteIgnore),
+      ),
+    )
 
-  //   val valids = RegInit(VecInit.fill(nSets, nWays)((false.B)))
-  //   val dirtys = RegInit(VecInit.fill(nSets, nWays)(false.B))
-  //   val tags   = SyncReadMem(nSets, Vec(nWays, UInt((new DCacheMeta).tag.getWidth.W)))
-  //   loadMemoryFromFileInline(tags, metaTagInitFile, MemoryLoadFileType.Binary)
-  //   val data = Seq.tabulate(nBanks) { _ =>
-  //     (0 until nWays).map { _ =>
-  //       SyncReadMem(nSets, Vec(bankBytes, UInt(8.W)))
-  //     }
-  //   }
+    io.axi.aw.valid      := (write_state === sHandleWriteReq && io.write.req.valid)
+    io.axi.aw.bits.addr  := io.write.req.bits.paddr & ~(blockBytes - 1).U(paddrWidth.W)
+    io.axi.aw.bits.id    := id.U
+    io.axi.aw.bits.len   := io.write.req.bits.len
+    io.axi.aw.bits.size  := log2Ceil(axiParams.dataBits / 8).U
+    io.axi.aw.bits.burst := AXIParameters.BURST_INCR
+    io.axi.aw.bits.lock  := 0.U
+    io.axi.aw.bits.cache := 0.U
+    io.axi.aw.bits.prot  := 0.U
 
-  //   assert(!(io.metaPort.read.en && io.metaPort.write.en))
-  //   assert(!(io.dataPort.read.en && io.dataPort.write.en))
+    io.write.req.ready := (write_state === sHandleWriteReq && io.axi.aw.ready)
 
-  //   val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)
-  //   val rdirtys = RegEnable(dirtys(io.metaPort.read.set), io.metaPort.read.en)
-  //   val rtags   = Wire(Vec(nWays, UInt((new DCacheMeta).tag.getWidth.W)))
+    io.axi.w.valid     := (write_state === sBusWrite || write_state === sBusWriteIgnore) && !write_burst_fin
+    io.axi.w.bits.id   := id.U
+    io.axi.w.bits.last := write_burst_last
+    io.axi.w.bits.data := write_data
+    io.axi.w.bits.strb := write_mask
 
-  //   io.metaPort.read.data zip rvalids zip rdirtys zip rtags foreach { case (((port, valid), dirty), tag) =>
-  //     port.valid := valid
-  //     port.dirty := dirty
-  //     port.tag   := tag
-  //   }
+    io.axi.b.ready := ((!io.flush && write_state === sBusWrite && io.write.resp.ready) ||
+      (write_state === sBusWriteIgnore)) && write_burst_fin
 
-  //   when(io.metaPort.write.en) {
-  //     valids(io.metaPort.write.set)(io.metaPort.write.way) := io.metaPort.write.data.valid
-  //     dirtys(io.metaPort.write.set)(io.metaPort.write.way) := io.metaPort.write.data.dirty
-  //   }
+    io.write.resp.valid := !io.flush && (write_state === sBusWrite) && io.axi.b.valid
 
-  //   if (singlePorted) {
-  //     rtags := tags.readWrite(
-  //       Mux(io.metaPort.write.en, io.metaPort.write.set, io.metaPort.read.set),
-  //       VecInit.fill(nWays)(io.metaPort.write.data.tag),
-  //       UIntToOH(io.metaPort.write.way).asBools,
-  //       io.metaPort.read.en || io.metaPort.write.en,
-  //       io.metaPort.write.en,
-  //     )
-  //     io.dataPort.read.data := VecInit(
-  //       data.zipWithIndex.map { case (wayData, i) =>
-  //         val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
-  //         val writeMask = io.dataPort.write.mask(bankBytes * (i + 1) - 1, bankBytes * i)
-  //         VecInit(wayData.zipWithIndex.map { case (data, w) =>
-  //           val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
-  //           data.readWrite(
-  //             Mux(wen, io.dataPort.write.set, io.dataPort.read.set),
-  //             VecInit((0 until bankBytes).map(i => writeData(8 * (i + 1) - 1, 8 * i))),
-  //             writeMask.asBools,
-  //             io.dataPort.read.en || io.dataPort.write.en,
-  //             wen,
-  //           )
-  //         })(io.dataPort.read.way)
-  //       },
-  //     ).asUInt
-  //   } else {
-  //     rtags := tags.read(io.metaPort.read.set, io.metaPort.read.en)
-  //     tags.write(
-  //       io.metaPort.write.set,
-  //       VecInit.fill(nWays)(io.metaPort.write.data.tag),
-  //       (UIntToOH(io.metaPort.write.way) & Fill(nWays, io.metaPort.write.en)).asBools,
-  //     )
+    if (params.debug) {
+      dontTouch(read_state)
+      dontTouch(arfire)
+      dontTouch(rfire)
+      dontTouch(read_burst_len)
+      dontTouch(read_burst_cnt)
+      dontTouch(read_burst_fin)
+      dontTouch(read_data_vec)
 
-  //     io.dataPort.read.data := VecInit(
-  //       data.map { wayData =>
-  //         VecInit(wayData.zipWithIndex.map { case (data, w) =>
-  //           val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
-  //           data.read(io.dataPort.read.set, wen)
-  //         })(io.dataPort.read.way)
-  //       },
-  //     ).asUInt
-  //     data.zipWithIndex.foreach { case (wayData, i) =>
-  //       val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
-  //       val writeMask = io.dataPort.write.mask(bankBytes * (i + 1) - 1, bankBytes * i)
-  //       wayData.zipWithIndex.foreach { case (data, w) =>
-  //         val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
-  //         when(wen) {
-  //           data.write(
-  //             io.dataPort.write.set,
-  //             VecInit((0 until bankBytes).map(i => writeData(8 * (i + 1) - 1, 8 * i))),
-  //           )
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
+      dontTouch(write_state)
+      dontTouch(awfire)
+      dontTouch(wfire)
+      dontTouch(bfire)
+      dontTouch(write_burst_len)
+      dontTouch(write_burst_cnt)
+      dontTouch(write_burst_last)
+      dontTouch(write_burst_fin)
+      dontTouch(write_data_vec)
+    }
+  }
 
-  // class DCacheStage0to1(implicit params: CoreParameters) extends Module {
+  class DCacheStorage(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, backendParams}
+    import commonParams.{vaddrWidth, paddrWidth}
+    import backendParams.{dcacheParams}
+    import dcacheParams._
+    private val metaTagInitFile = generateMetaTagHexFile
+
+    val io = IO(new Bundle {
+      val metaPort = new Bundle {
+        val read = new Bundle {
+          val en   = Input(Bool())
+          val set  = Input(UInt(setWidth.W))
+          val data = Output(Vec(nWays, new DCacheMeta))
+        }
+        val write = new Bundle {
+          val en   = Input(Bool())
+          val set  = Input(UInt(setWidth.W))
+          val way  = Input(UInt(wayWidth.W))
+          val data = Input(new DCacheMeta)
+        }
+      }
+      val dataPort = new Bundle {
+        val read = new Bundle {
+          val en   = Input(Bool())
+          val set  = Input(UInt(setWidth.W))
+          val way  = Input(UInt(wayWidth.W))
+          val data = Output(UInt(blockBits.W))
+        }
+        val write = new Bundle {
+          val en   = Input(Bool())
+          val set  = Input(UInt(setWidth.W))
+          val way  = Input(UInt(wayWidth.W))
+          val mask = Input(UInt((blockBytes).W))
+          val data = Input(UInt(blockBits.W))
+        }
+      }
+    })
+
+    val valids = RegInit(VecInit.fill(nSets, nWays)((false.B)))
+    val dirtys = Reg(Vec(nSets, Vec(nWays, Bool())))
+    val tags   = SyncReadMem(nSets, Vec(nWays, UInt((new DCacheMeta).tag.getWidth.W)))
+    loadMemoryFromFileInline(tags, metaTagInitFile, MemoryLoadFileType.Binary)
+    val data = Seq.tabulate(nBanks) { _ =>
+      (0 until nWays).map { _ =>
+        SyncReadMem(nSets, Vec(bankBytes, UInt(8.W)))
+      }
+    }
+
+    assert(!(io.metaPort.read.en && io.metaPort.write.en))
+    assert(!(io.dataPort.read.en && io.dataPort.write.en))
+
+    val rvalids = RegEnable(valids(io.metaPort.read.set), io.metaPort.read.en)
+    val rdirtys = RegEnable(dirtys(io.metaPort.read.set), io.metaPort.read.en)
+    val rtags   = Wire(Vec(nWays, UInt((new DCacheMeta).tag.getWidth.W)))
+
+    io.metaPort.read.data zip rvalids zip rdirtys zip rtags foreach { case (((port, valid), dirty), tag) =>
+      port.valid := valid
+      port.dirty := dirty
+      port.tag   := tag
+    }
+
+    when(io.metaPort.write.en) {
+      valids(io.metaPort.write.set)(io.metaPort.write.way) := io.metaPort.write.data.valid
+      dirtys(io.metaPort.write.set)(io.metaPort.write.way) := io.metaPort.write.data.dirty
+    }
+
+    if (singlePorted) {
+      rtags := tags.readWrite(
+        Mux(io.metaPort.write.en, io.metaPort.write.set, io.metaPort.read.set),
+        VecInit.fill(nWays)(io.metaPort.write.data.tag),
+        UIntToOH(io.metaPort.write.way).asBools,
+        io.metaPort.read.en || io.metaPort.write.en,
+        io.metaPort.write.en,
+      )
+      io.dataPort.read.data := VecInit(
+        data.zipWithIndex.map { case (wayData, i) =>
+          val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
+          val writeMask = io.dataPort.write.mask(bankBytes * (i + 1) - 1, bankBytes * i)
+          VecInit(wayData.zipWithIndex.map { case (data, w) =>
+            val ren = io.dataPort.read.en && (io.dataPort.read.way === w.U)
+            val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
+            data.readWrite(
+              Mux(wen, io.dataPort.write.set, io.dataPort.read.set),
+              VecInit((0 until bankBytes).map(i => writeData(8 * (i + 1) - 1, 8 * i))),
+              writeMask.asBools,
+              ren || wen,
+              wen,
+            )
+          })(io.dataPort.read.way)
+        },
+      ).asUInt
+    } else {
+      rtags := tags.read(io.metaPort.read.set, io.metaPort.read.en)
+      tags.write(
+        io.metaPort.write.set,
+        VecInit.fill(nWays)(io.metaPort.write.data.tag),
+        (UIntToOH(io.metaPort.write.way) & Fill(nWays, io.metaPort.write.en)).asBools,
+      )
+
+      io.dataPort.read.data := VecInit(
+        data.map { wayData =>
+          VecInit(wayData.zipWithIndex.map { case (data, w) =>
+            val ren = io.dataPort.read.en && (io.dataPort.read.way === w.U)
+            data.read(io.dataPort.read.set, ren)
+          })(io.dataPort.read.way)
+        },
+      ).asUInt
+      data.zipWithIndex.foreach { case (wayData, i) =>
+        val writeData = io.dataPort.write.data(bankBits * (i + 1) - 1, bankBits * i)
+        val writeMask = io.dataPort.write.mask(bankBytes * (i + 1) - 1, bankBytes * i)
+        wayData.zipWithIndex.foreach { case (data, w) =>
+          val wen = io.dataPort.write.en && (io.dataPort.write.way === w.U)
+          when(wen) {
+            data.write(
+              io.dataPort.write.set,
+              VecInit((0 until bankBytes).map(i => writeData(8 * (i + 1) - 1, 8 * i))),
+            )
+          }
+        }
+      }
+    }
+  }
+
+  class DCache(implicit params: CoreParameters) extends Module {
+    import params.{commonParams, axiParams, backendParams}
+    import commonParams.{dataBytes, dataWidth, vaddrWidth, paddrWidth}
+    import axiParams.{dataBits}
+    import backendParams.{dcacheParams}
+    import dcacheParams._
+    private val tagWidth = paddrWidth - setWidth - blockWidth
+    private val burstLen = blockBits / dataBits
+    require(dataBits == dataWidth)
+
+    val io = IO(new Bundle {
+      val flush = Input(Bool())
+      val axi   = new AXIBundle(axiParams)
+      val req = Flipped(Decoupled(new Bundle {
+        val cached = Bool()
+        val cacop  = UInt(CACOPType.getWidth.W)
+        val vaddr  = UInt(vaddrWidth.W)
+        val paddr  = UInt(paddrWidth.W)
+        val wen    = Bool()
+        val wmask  = UInt(dataBytes.W)
+        val wdata  = UInt(dataWidth.W)
+      }))
+      val resp = Decoupled(new Bundle {
+        val data = UInt(dataWidth.W)
+      })
+
+      val sIdle :: sLoopup :: sMiss :: sRefill :: sWriteCache :: Nil = Enum(5)
+    })
+  }
+
+  // class DCacheStage0to1(implicit paramsV」: CoreParameters) extends Module {
   //   import params.{commonParams, backendParams}
   //   import backendParams.{dcacheParams}
   //   import commonParams.{vaddrWidth, paddrWidth}
@@ -333,7 +410,7 @@ object DCache {
   //   io.resp.bits    := io.readMeta.data
   // }
 
-  // class DCacheStage1(implicit params: CoreParameters) extends Module {
+  //  class DCacheStage1(implicit params: CoreParameters) extends Module {
   //   import params.{commonParams, axiParams, backendParams}
   //   import commonParams.{dataWidth, vaddrWidth, paddrWidth}
   //   import axiParams.{dataBits}
