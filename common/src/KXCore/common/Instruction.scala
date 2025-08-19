@@ -138,7 +138,7 @@ object Privilege {
     val CACOP_IDX_INIT = Value(0.U(2.W)) // init cache line
     val CACOP_IDX_INV  = Value(1.U(2.W)) // invalidate and writeback indexed cache line
     val CACOP_HIT_INV  = Value(2.U(2.W)) // invalidate and writeback cache line if hit
-    val CACOP_HIT_READ = Value(3.U(2.W)) // read cache line if hit
+    val CACOP_NONE     = Value(3.U(2.W))
   }
 
   object ECODE extends ChiselEnum {

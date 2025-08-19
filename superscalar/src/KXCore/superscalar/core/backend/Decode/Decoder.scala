@@ -402,7 +402,7 @@ class Decoder(implicit params: CoreParameters) extends Module {
   )
 
   val NOP     = "b0000_001010_000000000000_00000_00000".U(instWidth.W)
-  val unImpls = Seq(PRELD)
+  val unImpls = Seq(PRELD, CACOP)
 
   for (i <- 0 until coreWidth) {
     val ine = !possiblePatterns.map(_.inst === io.req(i).inst).reduce(_ || _) ||

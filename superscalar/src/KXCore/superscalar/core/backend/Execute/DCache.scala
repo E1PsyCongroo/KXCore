@@ -28,11 +28,12 @@ object DCache {
     paddr.head(paddrWidth - setWidth - blockWidth)
   }
 
-  def getOffset(addr: UInt)(implicit params: CoreParameters): UInt = {
-    import params.{backendParams}
+  def getIdx(addr: UInt)(implicit params: CoreParameters): UInt = {
+    import params.{commonParams, backendParams}
+    import commonParams.{dataBytes}
     import backendParams.{dcacheParams}
     import dcacheParams.{blockWidth}
-    addr(blockWidth - 1, 0)
+    addr(blockWidth - 1, log2Ceil(dataBytes))
   }
 
   class DCacheMeta(implicit params: CoreParameters) extends Bundle {
@@ -375,9 +376,22 @@ object DCache {
       val resp = Decoupled(new Bundle {
         val data = UInt(dataWidth.W)
       })
-
-      val sIdle :: sLoopup :: sMiss :: sRefill :: sWriteCache :: Nil = Enum(5)
     })
+
+    val cacop     = RegEnable(io.req.bits.cacop, io.req.fire)
+    val paddr     = RegEnable(io.req.bits.paddr, io.req.fire)
+    val isWrite   = RegEnable(io.req.bits.wen, io.req.fire)
+    val wmask     = RegEnable(io.req.bits.wmask, io.req.fire)
+    val wdata     = RegEnable(io.req.bits.wdata, io.req.fire)
+    val set       = getSet(paddr)
+    val tag       = getTag(paddr)
+    val idx       = getIdx(paddr)
+    val isCache   = cacop === CACOP_NONE.asUInt
+    val isIdxInit = cacop === CACOP_IDX_INIT.asUInt
+    val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
+    val isHitInv  = cacop === CACOP_HIT_INV.asUInt
+
+    val sIdle :: sCacop :: sUncached :: sLoopup :: sMiss :: sRefill :: sWriteCache :: Nil = Enum(7)
   }
 
   // class DCacheStage0to1(implicit paramsV」: CoreParameters) extends Module {
@@ -466,7 +480,7 @@ object DCache {
   //   val writeData = bits.writeData
   //   val writeMask = bits.writeMask
   //   val wayMeta   = bits.meta
-  //   val isRead    = cacop === CACOP_HIT_READ.asUInt
+  //   val isRead    = cacop === CACOP_NONE.asUInt
   //   val isIdxInit = cacop === CACOP_IDX_INIT.asUInt
   //   val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
   //   val isHitInv  = cacop === CACOP_HIT_INV.asUInt
@@ -824,7 +838,7 @@ object DCache {
 //   val wayValid  = bits.cacheValid(set)
 //   val wayDirty  = bits.cacheDirty(set)
 //   val wayTag    = bits.wayTag
-//   val isRead    = cacop === CACOP_HIT_READ.asUInt
+//   val isRead    = cacop === CACOP_NONE.asUInt
 //   val isIdxInit = cacop === CACOP_IDX_INIT.asUInt
 //   val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
 //   val isHitInv  = cacop === CACOP_HIT_INV.asUInt

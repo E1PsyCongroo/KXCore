@@ -46,7 +46,7 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
       sHandleReq -> MuxCase(
         sHandleReq,
         Seq(
-          (!io.req.valid || (io.req.bits.cacop =/= CACOP_HIT_READ.asUInt) ||
+          (!io.req.valid || (io.req.bits.cacop =/= CACOP_NONE.asUInt) ||
             (io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) -> sHandleReq,
           (io.axi.ar.fire)                                                -> sWaitResp,
           (io.axi.aw.fire && io.axi.w.fire)                               -> sHandleReq,
@@ -66,7 +66,7 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
     ),
   )
 
-  io.axi.ar.valid      := state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_HIT_READ.asUInt && !io.req.bits.isWrite
+  io.axi.ar.valid      := state === sHandleReq && io.req.valid && io.req.bits.cacop === CACOP_NONE.asUInt && !io.req.bits.isWrite
   io.axi.ar.bits.addr  := io.req.bits.paddr
   io.axi.ar.bits.id    := 1.U
   io.axi.ar.bits.len   := 0.U
@@ -79,7 +79,7 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
   io.axi.r.ready := (state === sWaitResp) || (state === sIgnore)
 
   io.axi.aw.valid := (state === sHandleReq && io.req.valid &&
-    (io.req.bits.cacop === CACOP_HIT_READ.asUInt) &&
+    (io.req.bits.cacop === CACOP_NONE.asUInt) &&
     io.req.bits.isWrite && !(io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) ||
     (state === sWaitAWfire)
   io.axi.aw.bits.addr  := io.req.bits.paddr
@@ -92,7 +92,7 @@ class LoadStoreUnit(implicit params: CoreParameters) extends Module {
   io.axi.aw.bits.prot  := 0.U
 
   io.axi.w.valid := (state === sHandleReq && io.req.valid &&
-    (io.req.bits.cacop === CACOP_HIT_READ.asUInt) &&
+    (io.req.bits.cacop === CACOP_NONE.asUInt) &&
     io.req.bits.isWrite && !(io.req.bits.uop.exuCmd === EXU_SCW.asUInt && !io.llbit.bit)) ||
     (state === sWaitWfire)
   io.axi.w.bits.id   := 1.U

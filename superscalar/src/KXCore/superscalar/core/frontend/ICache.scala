@@ -255,7 +255,7 @@ object ICache {
     val tag       = getTag(paddr)
     val cacop     = bits.cacop
     val wayMeta   = bits.meta
-    val isRead    = cacop === CACOP_HIT_READ.asUInt
+    val isRead    = cacop === CACOP_NONE.asUInt
     val isIdxInit = cacop === CACOP_IDX_INIT.asUInt
     val isIdxInv  = cacop === CACOP_IDX_INV.asUInt
     val isHitInv  = cacop === CACOP_HIT_INV.asUInt

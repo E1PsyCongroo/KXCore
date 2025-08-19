@@ -98,6 +98,8 @@ class Core(implicit params: CoreParameters) extends Module {
   frontend.io.icacheCacop.cacop := backend.io.icacheCacop.cacop
   frontend.io.icacheCacop.vaddr := backend.io.icacheCacop.vaddr
   frontend.io.itlbResp          := tlb.io.transResp0
+  // disable icache
+  frontend.io.itlbResp.mat      := 0.U
   frontend.io.fetchPacket.ready := backend.io.fetchPacket.ready
   frontend.io.ftqReqs(0)        := backend.io.ftqReqs(0)
   frontend.io.ftqReqs(1)        := backend.io.ftqReqs(1)

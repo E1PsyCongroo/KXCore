@@ -120,7 +120,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   val s1_cached  = io_dtlb_resp.mat(0)
   val s1_vaddr   = WireInit(dcacheArb.io.out.bits.vaddr)
   val s1_paddr   = io_dtlb_resp.paddr
-  val s1_isWrite = EXUType.isSotre(s1_uop.bits.exuCmd) && s1_cacop === CACOP_HIT_READ.asUInt
+  val s1_isWrite = EXUType.isSotre(s1_uop.bits.exuCmd) && s1_cacop === CACOP_NONE.asUInt
   val s1_wmask = MuxLookup(s1_uop.bits.exuCmd, 0.U)(
     Seq(
       EXU_STB.asUInt -> ("b0001".U << s1_vaddr(1, 0)),
@@ -155,7 +155,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_dcache_cacop.exception.bits  := io_dtlb_resp.exception.bits
 
   dcacheArb.io.in(1).valid      := s1_uop.valid && s1_regs.valid
-  dcacheArb.io.in(1).bits.cacop := CACOP_HIT_READ.asUInt
+  dcacheArb.io.in(1).bits.cacop := CACOP_NONE.asUInt
   dcacheArb.io.in(1).bits.vaddr := s1_regs.bits(0) + s1_uop.bits.imm
 
   dcacheArb.io.out.ready := true.B
@@ -163,7 +163,7 @@ class MemExeUnit(implicit params: CoreParameters) extends ExecutionUnit {
   io_dtlb_req.isWrite := s1_isWrite
   io_dtlb_req.vaddr   := s1_vaddr
 
-  s1_exception.valid := (s1_cacop === CACOP_HIT_READ.asUInt) && (s1_isAle || io_dtlb_resp.exception.valid)
+  s1_exception.valid := (s1_cacop === CACOP_NONE.asUInt) && (s1_isAle || io_dtlb_resp.exception.valid)
   s1_exception.bits  := Mux(s1_isAle, ECODE.ALE.asUInt, io_dtlb_resp.exception.bits)
 
   val s2_reg = Module(
