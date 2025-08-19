@@ -516,12 +516,12 @@ class UniqueExeUnit(
         true.B,
       )
 
-      val isIPE = (io_csr_access.crmd.plv =/= 0.U) &&
+      val isIPE = EXUType.unqPriv(s1_uop.bits.exuCmd) && (io_csr_access.crmd.plv =/= 0.U) &&
         !(s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(4, 3) === CACOP_HIT_INV.asUInt)
 
       io_csr_access.we := EXUType.csrWen(s1_uop.bits.exuCmd)
 
-      io_tlb_cmd.cmd := s1_uop.bits.exuCmd
+      io_tlb_cmd.cmd := Mux(isIPE, EXU_TLBNONE.asUInt, s1_uop.bits.exuCmd)
 
       io_icache_cacop.valid := s1_uop.bits.exuCmd === EXU_CACOP.asUInt && s1_uop.bits.cacopCode(2, 0) === 0.U && !isIPE
       io_icache_cacop.cacop := s1_uop.bits.cacopCode(4, 3)

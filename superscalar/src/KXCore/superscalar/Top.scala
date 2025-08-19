@@ -56,7 +56,8 @@ class core_top(implicit params: CoreParameters) extends RawModule {
   val debug0      = IO(Output(new DebugInfo))
   val debug1      = IO(Output(new DebugInfo))
 
-  val core = withClockAndReset(aclk, !aresetn.asBool) { Module(new Core) }
+  val reset = withClock(aclk) { RegNext(!aresetn.asBool) }
+  val core  = withClockAndReset(aclk, reset) { Module(new Core) }
   core.io.intrpt      := intrpt
   core.io.break_point := break_point
   core.io.infor_flag  := infor_flag

@@ -253,6 +253,14 @@ object Privilege {
       }
     }
 
+    class EUEN extends Bundle {
+      val value = UInt(32.W)
+
+      def write(value: UInt): UInt = {
+        value & 1.U(32.W)
+      }
+    }
+
     class ECFG extends Bundle {
       val value = UInt(32.W)
 
@@ -353,6 +361,14 @@ object Privilege {
 
       def write(value: UInt): UInt = {
         (value & 0x3ff.U(32.W)) | 0xa0000.U(32.W)
+      }
+    }
+
+    class PGD extends Bundle {
+      val value = UInt(32.W)
+
+      def write(value: UInt): UInt = {
+        (value & ~0xfff.U(32.W))
       }
     }
 

@@ -111,6 +111,7 @@ class TLB(implicit params: CoreParameters) extends Module {
   })
 
   val tlbEntry = Reg(Vec(tlbNum, new TLBEntry))
+  when(reset.asBool) { tlbEntry.map(_.e := false.B) }
 
   def tlb_translate(req: TLBReq, is_fetch: Boolean): TLBResp = {
     val vaddr = req.vaddr
